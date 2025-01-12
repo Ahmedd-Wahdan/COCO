@@ -5,8 +5,11 @@ from core.wrapper import timing_decorator
 import core.Function as fn
 import core.optim as opt
 import core.loss as ls
+
+
+
 class Layer:
-    def __init__(self,activation=None, initialize_type="he"):
+    def __init__(self,activation="none", initialize_type="he"):
         """
         
         """
@@ -55,7 +58,6 @@ class Layer:
         return w, b
 
     
-    
 
 class Linear(Layer):
     def __init__(self, dims: tuple, activation="none", initialize_type="he", dropout=None):
@@ -99,16 +101,7 @@ class Linear(Layer):
         return w, b
 
     def forward(self, input, test=False):
-        """
-        Forward pass through the linear layer.
-
-        Args:
-            input (ndarray): Input of shape (batch_size, input_dim).
-            test (bool, optional): Whether to use dropout during testing. Defaults to False.
-
-        Returns:
-            ndarray: Output of shape (batch_size, output_dim).
-        """
+  
         self.input = input
         self.z = np.dot(self.input, self.weights) + self.bias  # Linear transformation
         self.out = self.activation.forward(self.z)  # Apply activation
@@ -122,22 +115,10 @@ class Linear(Layer):
         # print("output_of_forward",self.out.shape)
         return self.out
 
-    def backward(self, error_wrt_output,l1=None,l2=None):
-        """
-        Backward pass through the linear layer.
-
-        Args:
-            error_wrt_output (ndarray): Gradient of the loss w.r.t. the output of shape (batch_size, output_dim).
-
-        Returns:
-            ndarray: Gradient of the loss w.r.t. the input of shape (batch_size, input_dim).
-        """
-        # Gradient of activation
-        # self.grad_w = np.zeros_like(self.weights)  # zero gradients before accumulating
-        # self.grad_b = np.zeros_like(self.bias)
-
-
-
+    def backward(self, error_wrt_output,**kwargs):
+        l1 = kwargs.get('l1', None)
+        l2 = kwargs.get('l2', None)
+    
         da_dz = self.activation.backward(self.z)
         batch_size = error_wrt_output.shape[0]
         # Gradient of loss w.r.t. pre-activation (z)
@@ -161,15 +142,6 @@ class Linear(Layer):
         assert self.grad_w.shape == self.weights.shape
         assert self.grad_b.shape == self.bias.shape
         assert self.loss_wrt_input.shape == self.input.shape
-
-        # print("loss_wrt_input",self.loss_wrt_input.shape)
-
-
-        """
-        
-        UPDATE THE GRADIENTS HERE TO AVOID A SECOND LOOP IN THE TRAINING FUNCTION
-        
-        """
 
         return self.loss_wrt_input
 
@@ -233,7 +205,7 @@ class batchnorm1d(Layer):
             (mean_grad / batch_size)
         )
 
-        # Ensure gradients are correctly computed
+        
         self.grad_w = np.sum(error_wrt_output * self.input_normalized, axis=0, keepdims=True)
         self.grad_b = np.sum(error_wrt_output, axis=0, keepdims=True) / batch_size
 
@@ -269,9 +241,10 @@ class Network:
     def backward(self, error_grad):
         self.t+=1
         for layer in reversed(self.layers):
-            # print("error_grad",error_grad)
             error_grad = layer.backward(error_grad,l1=self.l1,l2=self.l2)
-            self.optimizer_step(layer)
+            # print("error_grad",error_grad)
+            if isinstance(layer,Layer):
+                self.optimizer_step(layer)
 
 
     def optimizer_step(self,layer):
@@ -298,12 +271,7 @@ class Network:
         return np.eye(num_classes)[labels]
     @timing_decorator
     def train(self, x_train, y_train, epochs=10, batch_size=32, learning_rate=0.001, classification=True, verbose=True, L1=0, L2=0, optimizer="momentum", beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-        """
-        This function performs training for the neural network:
-        - Forward pass
-        - Calculate loss
-        - Backward pass and update gradients
-        """
+
         self.learning_rate = learning_rate
         self.beta1 = beta1
         self.beta2 = beta2
@@ -329,6 +297,8 @@ class Network:
 
             # Iterate over batches
             for i in range(0, x.shape[0], batch_size):
+                # if i ==2*batch_size:
+                #     raise ValueError("2 iterations")
                 X_batch = x[i:i + batch_size, :]
                 y_batch = y[i:i + batch_size, :]
               
@@ -358,15 +328,7 @@ class Network:
 
 
     def plot_loss(self):
-        """
-        Plots the loss curve of the neural network model.
 
-        Parameters:
-            None
-
-        Returns:
-            None
-        """
         plt.plot(self.losses)
         plt.xlabel('Epoch')
         plt.ylabel('Loss')
@@ -375,18 +337,8 @@ class Network:
         plt.show()
     def predict(self, X):
         """
-        Predicts the output for a given input using the trained neural network model.
-
-        Parameters:
-            X (ndarray): The input data for prediction. It should be a 2D array where each row represents a sample.
-
-        Returns:
-            If the model is a binary classification model:
-                - 1 or 0, depending on the predicted class for the corresponding sample in X.
-            If the model is a multi-class classification model:
-                - the class number
-            If the model is a regression model:
-                - scalar continuous value
+        RETURNS: LOGITS (BATCH_SIZE,NUM_CLASSES)
+        
         """
         self.forward(X, test=True)
         out = self.last_out
