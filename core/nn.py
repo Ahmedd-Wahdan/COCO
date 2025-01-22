@@ -5,7 +5,7 @@ from core.wrapper import timing_decorator
 import core.Function as fn
 import core.optim as opt
 import core.loss as ls
-
+from operations import FastConvolver
 
 
 class Layer:
@@ -145,7 +145,90 @@ class Linear(Layer):
 
         return self.loss_wrt_input
 
+class Conv2d(Layer):
+    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0):
+        super().__init__()
+        self.input_channels = input_channels
+        self.output_channels = output_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
 
+        self.convolver = FastConvolver()
+
+        self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size)
+
+        self.kernels = np.random.randn(*self.kernels_shape)
+        self.biases = np.random.randn(self.output_channels)
+
+    def forward(self, input, test=False):
+        if input.ndim != 4:
+            raise ValueError(f"Expected 4D input (batch_size, channels, height, width), got shape {input.shape}")
+        if input.shape[1] != self.input_channels:
+            raise ValueError(f"Expected {self.input_channels} input channels, got {input.shape[1]}")
+
+        self.input = input
+        batch_size = input.shape[0]
+
+        # Output Dims
+        h_in, w_in = input.shape[2:]
+        h_out = ((h_in + 2 * self.padding - self.kernel_size) // self.stride) + 1
+        w_out = ((w_in + 2 * self.padding - self.kernel_size) // self.stride) + 1
+
+        # Output Tensor
+        output = np.zeros((batch_size, self.output_channels, h_out, w_out))
+
+        # Processing Batch
+        for i in range(batch_size):
+            sample = input[i]  # Shape: (C, H, W)
+            conv_result = self.convolver.convolve(sample, self.kernels, self.stride, self.padding)
+            output[i] = conv_result + self.biases.reshape(-1, 1, 1)
+
+        self.output = output
+        return self.output
+
+    def backward(self, output_grad):
+        batch_size = self.input.shape[0]
+
+        # Initialize gradient for kernels
+        self.dKernels = np.zeros_like(self.kernels)
+        self.dBiases = np.sum(output_grad, axis=(0, 2, 3))
+
+        # Compute kernel gradients
+        for i in range(batch_size):
+            self.dKernels += self.convolver.convolve(
+                self.input[i],
+                output_grad[i].reshape(self.output_channels, 1, *output_grad.shape[2:]),
+                self.stride,
+                self.padding
+            )
+
+        # Prepare kernels for input gradient computation
+        flipped_kernels = np.flip(self.kernels, axis=(2, 3))
+
+        # Calculate padding for input gradient
+        pad_h = (self.kernel_size - 1 - self.padding)
+        pad_w = (self.kernel_size - 1 - self.padding)
+        if self.stride > 1:
+            pad_h += (self.stride - 1)
+            pad_w += (self.stride - 1)
+
+        # Compute input gradients
+        dInput = np.zeros_like(self.input)
+        for i in range(batch_size):
+            output_grad_padded = np.pad(
+                output_grad[i],
+                ((0, 0), (pad_h, pad_h), (pad_w, pad_w)),
+                mode='constant'
+            )
+            dInput[i] = self.convolver.convolve(
+                output_grad_padded,
+                flipped_kernels,
+                stride=1,
+                padding=0
+            )
+
+        return dInput
 
 class batchnorm1d(Layer):
     def __init__(self, dim, activation="none", initialize_type="zero", dropout=None):
