@@ -155,8 +155,8 @@ class Conv2d(Layer):
         self.padding = padding
 
         self.convolver = FastConvolver()
-
-        self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size)
+        
+        self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size) #(number of filters, number of channels, filter height, filter width)
 
         self.kernels = np.random.randn(*self.kernels_shape)
         self.biases = np.random.randn(self.output_channels)
@@ -168,10 +168,9 @@ class Conv2d(Layer):
             raise ValueError(f"Expected {self.input_channels} input channels, got {input.shape[1]}")
 
         self.input = input
-        batch_size = input.shape[0]
+        batch_size,channels,h_in,w_in = input.shape
 
         # Output Dims
-        h_in, w_in = input.shape[2:]
         h_out = ((h_in + 2 * self.padding - self.kernel_size) // self.stride) + 1
         w_out = ((w_in + 2 * self.padding - self.kernel_size) // self.stride) + 1
 
@@ -179,29 +178,25 @@ class Conv2d(Layer):
         output = np.zeros((batch_size, self.output_channels, h_out, w_out))
 
         # Processing Batch
-        for i in range(batch_size):
-            sample = input[i]  # Shape: (C, H, W)
-            conv_result = self.convolver.convolve(sample, self.kernels, self.stride, self.padding)
-            output[i] = conv_result + self.biases.reshape(-1, 1, 1)
+        output = self.convolver.convolve(self.input, self.kernels, self.stride, self.padding)
 
         self.output = output
+        self.output += self.biases.reshape(1, -1, 1, 1)  # Add biases to each output channel
         return self.output
 
     def backward(self, output_grad):
         batch_size = self.input.shape[0]
-
+        assert output_grad.shape == self.output.shape
         # Initialize gradient for kernels
         self.dKernels = np.zeros_like(self.kernels)
-        self.dBiases = np.sum(output_grad, axis=(0, 2, 3))
+        self.dBiases = np.sum(output_grad, axis=(0, 2, 3))/batch_size
+        assert self.dBiases.shape == self.biases.shape
 
-        # Compute kernel gradients
-        for i in range(batch_size):
-            self.dKernels += self.convolver.convolve(
-                self.input[i],
-                output_grad[i].reshape(self.output_channels, 1, *output_grad.shape[2:]),
-                self.stride,
-                self.padding
-            )
+        self.dKernels = self.convolver.convolve(self.input, output_grad, self.stride, self.padding)
+
+        assert self.dKernels.shape == self.kernels.shape
+        
+
 
         # Prepare kernels for input gradient computation
         flipped_kernels = np.flip(self.kernels, axis=(2, 3))
@@ -215,18 +210,11 @@ class Conv2d(Layer):
 
         # Compute input gradients
         dInput = np.zeros_like(self.input)
-        for i in range(batch_size):
-            output_grad_padded = np.pad(
-                output_grad[i],
-                ((0, 0), (pad_h, pad_h), (pad_w, pad_w)),
-                mode='constant'
-            )
-            dInput[i] = self.convolver.convolve(
-                output_grad_padded,
-                flipped_kernels,
-                stride=1,
-                padding=0
-            )
+
+        output_grad_padded = np.pad(output_grad,((0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)),mode='constant')
+
+        dInput = self.convolver.convolve(output_grad_padded,flipped_kernels,stride=1,padding=0)
+        assert dInput.shape == self.input.shape
 
         return dInput
 
