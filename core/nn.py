@@ -5,7 +5,7 @@ from core.wrapper import timing_decorator
 import core.Function as fn
 import core.optim as opt
 import core.loss as ls
-from operations import FastConvolver
+from core.operations import FastConvolver
 
 
 class Layer:
@@ -103,6 +103,7 @@ class Linear(Layer):
     def forward(self, input, test=False):
   
         self.input = input
+        self.input.reshape(self.input.shape[0],-1) #flatten the input while keeping the batch dimension
         self.z = np.dot(self.input, self.weights) + self.bias  # Linear transformation
         self.out = self.activation.forward(self.z)  # Apply activation
 
@@ -185,35 +186,47 @@ class Conv2d(Layer):
         return self.output
 
     def backward(self, output_grad):
-        batch_size = self.input.shape[0]
-        assert output_grad.shape == self.output.shape
-        # Initialize gradient for kernels
-        self.dKernels = np.zeros_like(self.kernels)
-        self.dBiases = np.sum(output_grad, axis=(0, 2, 3))/batch_size
-        assert self.dBiases.shape == self.biases.shape
 
-        self.dKernels = self.convolver.convolve(self.input, output_grad, self.stride, self.padding)
+        B, C, H, W = self.input.shape
+        B, F, H_out, W_out = output_grad.shape
+        _, C_k, H_k, W_k = self.kernels.shape
+        output_grad.reshape(self.output.shape)
+        #grad wrt biases
+        self.dBiases = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)/B
+        assert self.dBiases.shape == self.biases.shape
+       #grad wrt kernels [we multiply the gradient of each filter with the corresponding patch that was multipled by the filter in the forward pass] 
+        col_matrix, _, _ = self.convolver._im2col(self.input, (C_k, H_k, W_k), self.stride, self.padding)
+       #col_matrix is of shape (B*H_out*W_out, C*H_k*W_k) (number of patches, number of elements in each patch)
+        grad_reshaped = output_grad.reshape(F, -1)  
+        #grad_reshaped is of shape (F, B*H_out*W_out) (number of filters, number of patches)
+       
+
+        #how each patch contributed to each filter
+        grad_kernel_matrix = grad_reshaped @ col_matrix
+
+        #reshape to original Filter shape
+        self.dKernels = grad_kernel_matrix.reshape(F, C_k, H_k, W_k)
 
         assert self.dKernels.shape == self.kernels.shape
-        
+
+        #flip kernels and transpose to make the output channels of the convolution matches the input channels
+        flipped_kernels = np.flip(self.kernels, axis=(2, 3)).transpose(1, 0, 2, 3)
 
 
-        # Prepare kernels for input gradient computation
-        flipped_kernels = np.flip(self.kernels, axis=(2, 3))
-
-        # Calculate padding for input gradient
+        # padd to compensate padding in the forward
         pad_h = (self.kernel_size - 1 - self.padding)
         pad_w = (self.kernel_size - 1 - self.padding)
         if self.stride > 1:
             pad_h += (self.stride - 1)
             pad_w += (self.stride - 1)
 
-        # Compute input gradients
-        dInput = np.zeros_like(self.input)
-
+        
+       
+        #pad output_grad
         output_grad_padded = np.pad(output_grad,((0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)),mode='constant')
-
+        #gradient wrt input (prev layer output)
         dInput = self.convolver.convolve(output_grad_padded,flipped_kernels,stride=1,padding=0)
+        
         assert dInput.shape == self.input.shape
 
         return dInput

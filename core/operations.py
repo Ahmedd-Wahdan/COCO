@@ -34,6 +34,7 @@ class FastConvolver:
         # Reshape to (B * H_out * W_out, C * H_k * W_k)
         col_matrix = windows.transpose(0, 2, 3, 1, 4, 5).reshape(-1, C * H_k * W_k)#here each row is a patch and the patches of all the images are stacked on each others
         #col matrix if of shape (B*H_out*W_out, C*H_k*W_k) 
+        # print("col matrix shape",col_matrix.shape)	
 
         return col_matrix, H_out, W_out
     
@@ -49,6 +50,7 @@ class FastConvolver:
             numpy.ndarray: Row-transformed kernels.
         """
         F, C, H_k, W_k = kernels.shape
+        
         return kernels.reshape(F,-1).T
 
     def _col2im(self, result_matrix,B, H_out, W_out, num_filters):
@@ -84,16 +86,18 @@ class FastConvolver:
 
         output_channels, C, H_k, W_k = kernels.shape
         B = input_data.shape[0]
-
+        # print("kernels shape",kernels.shape)
         col_matrix, H_out, W_out = self._im2col(input_data, (C, H_k, W_k), stride, padding)
-
+        # print("col matrix shape",col_matrix.shape)
 
         kernel_matrix = self._transform_kernels(kernels)
 
         #kernel_matrix is of shape (C*H_k*W_k, F) each column is a kernel
         #col_matrix is of shape (B*H_out*W_out, C*H_k*W_k) each row is a patch
-
-
+        # print("kernels shape",kernels.shape)
+        # print("input_data shape",input_data.shape)
+        # print("col_matrix shape",col_matrix.shape)
+        # print("kernel_matrix shape",kernel_matrix.shape)
         result_matrix =  col_matrix @ kernel_matrix
 
         #result_matrix is of shape (B*H_out*W_out, F) each row is the result of the convolution of a patch with all the kernels
