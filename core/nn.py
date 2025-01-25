@@ -7,6 +7,8 @@ import core.optim as opt
 import core.loss as ls
 from core.operations import FastConvolver
 from numpy.lib.stride_tricks import sliding_window_view
+from core.Datasets import Dataset
+import time
 
 
 class Layer:
@@ -102,10 +104,15 @@ class Linear(Layer):
         return w, b
 
     def forward(self, input, test=False):
+        # start_time = time.time()
   
         self.input = input
-        self.input.reshape(self.input.shape[0],-1) #flatten the input while keeping the batch dimension
-        self.z = np.dot(self.input, self.weights) + self.bias  # Linear transformation
+        if self.input.ndim == 4:  # If input is 4D (e.g., [B, C, H, W])
+            B, C, H, W = self.input.shape
+            self.input = self.input.reshape(B, -1)  # Flatten to [B, C*H*W]
+        elif self.input.ndim != 2:  # If input is not 2D or 4D, raise an error
+            raise ValueError(f"Linear layer received input of unsupported shape {self.input.shape}")
+        self.z = (self.input @ self.weights) + self.bias  # Linear transformation
         self.out = self.activation.forward(self.z)  # Apply activation
 
         # Apply dropout during training
@@ -115,9 +122,12 @@ class Linear(Layer):
             self.out /= (1 - self.dropout)
 
         # print("output_of_forward",self.out.shape)
+        # end_time = time.time()
+        # print(f"Linear forward took {end_time - start_time:.4f}")
         return self.out
 
     def backward(self, error_wrt_output,**kwargs):
+        # start_time = time.time()
         l1 = kwargs.get('l1', None)
         l2 = kwargs.get('l2', None)
     
@@ -127,15 +137,15 @@ class Linear(Layer):
         d_z = error_wrt_output * da_dz
 
         # Gradient of loss w.r.t. weights
-        self.grad_w = np.dot(self.input.T, d_z)/batch_size
+        self.grad_w = np.dot(self.input.T, d_z)
         if l1 is not None:
             self.grad_w += (l1*np.sign(self.weights))
 
         if l2 is not None:
-            self.grad_w += (l2*2*self.weights)
+            self.grad_w += (l2*self.weights)
 
         # Gradient of loss w.r.t. bias
-        self.grad_b = np.sum(d_z, axis=0, keepdims=True)/batch_size
+        self.grad_b = np.sum(d_z, axis=0, keepdims=True)
 
         # print("grad_w",self.grad_w)
         # Gradient of loss w.r.t. input
@@ -144,7 +154,8 @@ class Linear(Layer):
         assert self.grad_w.shape == self.weights.shape
         assert self.grad_b.shape == self.bias.shape
         assert self.loss_wrt_input.shape == self.input.shape
-
+        # end_time = time.time()
+        # print(f"Linear backward took {end_time - start_time:.4f}")
         return self.loss_wrt_input
 
 class Conv2d(Layer):
@@ -160,10 +171,19 @@ class Conv2d(Layer):
         
         self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size) #(number of filters, number of channels, filter height, filter width)
 
-        self.kernels = np.random.randn(*self.kernels_shape)
-        self.biases = np.random.randn(self.output_channels)
+        self.weights = np.random.randn(*self.kernels_shape)
+        self.grad_w = np.zeros_like(self.weights)
+        self.bias  = np.random.randn(self.output_channels)
+        self.bias = self.bias.reshape(1, -1,1,1)
+        self.grad_b = np.zeros_like(self.bias)
+        self.momentum_w = np.zeros(self.kernels_shape)
+        self.momentum_b = np.zeros_like(self.bias)
+        self.Accumelated_Gsquare_w = np.zeros(self.kernels_shape)
+        self.Accumelated_Gsquare_b = np.zeros_like(self.bias)
+
 
     def forward(self, input, test=False):
+        # start_time = time.time()
         if input.ndim != 4:
             raise ValueError(f"Expected 4D input (batch_size, channels, height, width), got shape {input.shape}")
         if input.shape[1] != self.input_channels:
@@ -180,21 +200,24 @@ class Conv2d(Layer):
         output = np.zeros((batch_size, self.output_channels, h_out, w_out))
 
         # Processing Batch
-        output = self.convolver.convolve(self.input, self.kernels, self.stride, self.padding)
+        output = self.convolver.convolve(self.input, self.weights, self.stride, self.padding)
 
         self.output = output
-        self.output += self.biases.reshape(1, -1, 1, 1)  # Add biases to each output channel
+        self.output += self.bias  # Add biases to each output channel
+        # end_time = time.time()
+        # print(f"conv forward took {end_time - start_time:.4f}")
         return self.output
 
-    def backward(self, output_grad):
-
+    def backward(self, output_grad,**kwargs):
+        # start_time = time.time()
         B, C, H, W = self.input.shape
         B, F, H_out, W_out = output_grad.shape
-        _, C_k, H_k, W_k = self.kernels.shape
+        _, C_k, H_k, W_k = self.weights.shape
         output_grad.reshape(self.output.shape)
         #grad wrt biases
-        self.dBiases = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)/B
-        assert self.dBiases.shape == self.biases.shape
+        self.grad_b = self.dBiases = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)
+
+        assert self.dBiases.shape == self.bias.shape
        #grad wrt kernels [we multiply the gradient of each filter with the corresponding patch that was multipled by the filter in the forward pass] 
         col_matrix, _, _ = self.convolver._im2col(self.input, (C_k, H_k, W_k), self.stride, self.padding)
        #col_matrix is of shape (B*H_out*W_out, C*H_k*W_k) (number of patches, number of elements in each patch)
@@ -206,12 +229,12 @@ class Conv2d(Layer):
         grad_kernel_matrix = grad_reshaped @ col_matrix
 
         #reshape to original Filter shape
-        self.dKernels = grad_kernel_matrix.reshape(F, C_k, H_k, W_k)
+        self.grad_w = self.dKernels = grad_kernel_matrix.reshape(F, C_k, H_k, W_k)
 
-        assert self.dKernels.shape == self.kernels.shape
+        assert self.dKernels.shape == self.weights.shape
 
         #flip kernels and transpose to make the output channels of the convolution matches the input channels
-        flipped_kernels = np.flip(self.kernels, axis=(2, 3)).transpose(1, 0, 2, 3)
+        flipped_kernels = np.flip(self.weights, axis=(2, 3)).transpose(1, 0, 2, 3)
 
 
         # padd to compensate padding in the forward
@@ -229,7 +252,8 @@ class Conv2d(Layer):
         dInput = self.convolver.convolve(output_grad_padded,flipped_kernels,stride=1,padding=0)
         
         assert dInput.shape == self.input.shape
-
+        # end_time = time.time()
+        # print(f"conv backward took {end_time - start_time:.4f}")
         return dInput
 
 class MaxPool2d:
@@ -241,7 +265,8 @@ class MaxPool2d:
         self.convolver = FastConvolver()
         self.cache = {}
 
-    def forward(self, X):
+    def forward(self, X, test=False):
+        # start_time = time.time()
         """Vectorized max pooling forward pass"""
         B, C, H, W = X.shape
         H_k, W_k = self.kernel_size
@@ -270,6 +295,7 @@ class MaxPool2d:
         output = output.reshape(B, C, H_out // W_out, W_out)
 
         # Store cache for backward
+        self.cache['out_shape'] = output.shape
         self.cache['input'] = X
         self.cache['windows'] = windows
         self.cache['max_indices'] = (
@@ -277,14 +303,16 @@ class MaxPool2d:
             windows.shape,
             (stride_h, stride_w)
         )
-
+        # end_time = time.time()
+        # print(f"maxpool forward took {end_time - start_time:.4f}")
         return output
 
-    def backward(self, grad_output):
+    def backward(self, grad_output,**kwargs):
+        # start_time = time.time()
         """Vectorized max pooling backward pass"""
         X = self.cache['input']
         max_indices, window_shape, strides = self.cache['max_indices']
-
+        grad_output = grad_output.reshape(*self.cache['out_shape'])
         # Initialize gradient
         grad_input = np.zeros_like(X)
         B, C, H_out, W_out = grad_output.shape
@@ -306,7 +334,8 @@ class MaxPool2d:
 
                         # Accumulate gradient
                         grad_input[b, c, h_start + h_offset, w_start + w_offset] += grad_output[b, c, i, j]
-
+        # end_time = time.time()
+        # print(f"maxpool forward took {end_time - start_time:.4f}")
         return grad_input
 
 class batchnorm1d(Layer):
@@ -392,11 +421,14 @@ class Network:
         self.l1=None
         self.l2=None
         self.t=0
+        self.featuremaps=[]
 
 
     def forward(self, X, test=False):
         for layer in self.layers:
             X = layer.forward(X, test)
+            if isinstance(layer,Conv2d) and test==True:
+                self.featuremaps.append(X)
         self.last_out = X
 
 
@@ -418,22 +450,24 @@ class Network:
 
 
     def one_hot_encode(labels, num_classes=None):
-        """
-        Convert integer labels to one-hot encoded labels.
-
-        Args:
-            labels (np.ndarray): Integer labels of shape (N,), where N is the number of samples.
-            num_classes (int, optional): Number of classes. If None, it is inferred from the labels.
-
-        Returns:
-            np.ndarray: One-hot encoded labels of shape (N, num_classes).
-        """
+        if labels.ndim == 2:
+        # Check if all rows have exactly one `1` and the rest `0`
+            is_one_hot = np.all(np.isin(labels, [0, 1])) and np.all(labels.sum(axis=1) == 1)
+        if num_classes is not None:
+            is_one_hot = is_one_hot and (labels.shape[1] == num_classes)
+        if is_one_hot:
+            return labels.astype(int)  # Ensure integer type
+    
+        # Proceed to encode if not one-hot
         if num_classes is None:
-            num_classes = np.max(labels) + 1  # Infer number of classes from labels
-        return np.eye(num_classes)[labels]
+            num_classes = np.max(labels) + 1  # Infer from integer labels
+        return np.eye(num_classes, dtype=int)[labels]
     @timing_decorator
-    def train(self, x_train, y_train, epochs=10, batch_size=32, learning_rate=0.001, classification=True, verbose=True, L1=0, L2=0, optimizer="momentum", beta1=0.9, beta2=0.999, EMA=False, clip_value=10):
-
+    def train(
+        self, x_train, y_train, epochs=10, batch_size=32, learning_rate=0.001, 
+        classification=True, verbose=True, L1=0, L2=0, optimizer="momentum", 
+        beta1=0.9, beta2=0.999, EMA=False, clip_value=10, shuffle=True
+    ):
         self.learning_rate = learning_rate
         self.beta1 = beta1
         self.beta2 = beta2
@@ -445,39 +479,40 @@ class Network:
         
         # Initialize losses for tracking
         self.losses = []  # Store average loss per epoch
+        if isinstance(self.layers[0], Conv2d) and x_train.ndim == 2:
+                side = int(np.sqrt(x_train.shape[1]))
+                x_train = x_train.reshape(-1, 1, side, side)
+                y_train = self.one_hot_encode(y_train, num_classes=y_train.max() + 1)
+        # Create Dataset instance
+        dataset = Dataset(x_train, y_train, batch_size, shuffle=shuffle)
 
         for epoch in range(1, epochs + 1):
-            # Reset epoch metrics
-            epoch_loss = 0.0  # Accumulate loss for all batches in the epoch
-            batches_len = 0   # Track the number of batches
+            # Reset dataset (shuffle indices if shuffle=True)
+            dataset.reset()
+            epoch_loss = 0.0
+            batches_len = 0
 
-            # Shuffle the data
-            indices = np.arange(x_train.shape[0])
-            np.random.shuffle(indices)
-            x = x_train[indices, :]
-            y = y_train[indices, :]
+            # Iterate over batches using the Dataset
+            # cnt=0
+            for X_batch, y_batch in dataset:
+                # if cnt==1:
+                #     raise ValueError("one iteration")
+                # cnt+=1
 
-            # Iterate over batches
-            for i in range(0, x.shape[0], batch_size):
-                # if i ==2*batch_size:
-                #     raise ValueError("2 iterations")
-                X_batch = x[i:i + batch_size, :]
-                y_batch = y[i:i + batch_size, :]
-              
+                # Forward pass
                 self.forward(X_batch, test=False)
-
+                
+                # Compute loss and gradient
                 batch_loss, error_grad = ls.sparse_categorical_cross_entropy(y_batch, self.last_out, axis=1)
-                
                 epoch_loss += batch_loss
-                
                 batches_len += 1
 
-                # Backward pass and gradient update
+                # Backward pass and parameter update
                 self.backward(error_grad)
 
-            # Calculate average loss for the epoch
+            # Calculate average epoch loss
             avg_epoch_loss = epoch_loss / batches_len
-            self.losses.append(avg_epoch_loss)  # Store average epoch loss
+            self.losses.append(avg_epoch_loss)
 
             # Verbose logging
             if verbose:
