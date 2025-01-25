@@ -6,6 +6,7 @@ import core.Function as fn
 import core.optim as opt
 import core.loss as ls
 from core.operations import FastConvolver
+from numpy.lib.stride_tricks import sliding_window_view
 
 
 class Layer:
@@ -230,6 +231,83 @@ class Conv2d(Layer):
         assert dInput.shape == self.input.shape
 
         return dInput
+
+class MaxPool2d:
+    def __init__(self, kernel_size, stride=None, padding=0):
+        self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+        self.stride = stride if stride is not None else self.kernel_size
+        self.stride = self.stride if isinstance(self.stride, tuple) else (self.stride, self.stride)
+        self.padding = padding
+        self.convolver = FastConvolver()
+        self.cache = {}
+
+    def forward(self, X):
+        """Vectorized max pooling forward pass"""
+        B, C, H, W = X.shape
+        H_k, W_k = self.kernel_size
+        stride_h, stride_w = self.stride
+
+        # Pad input
+        padded_X = np.pad(
+            X,
+            ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)),
+            mode='constant'
+        )
+
+        # Extract sliding windows
+        windows = sliding_window_view(padded_X, (H_k, W_k), axis=(2, 3))
+        windows = windows[:, :, ::stride_h, ::stride_w, :, :]
+
+        # Compute max and indices
+        max_windows = windows.reshape(B, C, -1, H_k * W_k)
+        max_vals = max_windows.max(axis=-1)
+        max_indices = max_windows.argmax(axis=-1)
+
+        # Reshape output to 4D
+        output = max_vals.reshape(B, C, -1)
+        H_out = output.shape[-1]
+        W_out = int(np.sqrt(H_out))
+        output = output.reshape(B, C, H_out // W_out, W_out)
+
+        # Store cache for backward
+        self.cache['input'] = X
+        self.cache['windows'] = windows
+        self.cache['max_indices'] = (
+            max_indices,
+            windows.shape,
+            (stride_h, stride_w)
+        )
+
+        return output
+
+    def backward(self, grad_output):
+        """Vectorized max pooling backward pass"""
+        X = self.cache['input']
+        max_indices, window_shape, strides = self.cache['max_indices']
+
+        # Initialize gradient
+        grad_input = np.zeros_like(X)
+        B, C, H_out, W_out = grad_output.shape
+        stride_h, stride_w = strides
+
+        # Compute gradient indices
+        for b in range(B):
+            for c in range(C):
+                for i in range(H_out):
+                    for j in range(W_out):
+                        # Compute base position
+                        h_start = i * stride_h
+                        w_start = j * stride_w
+
+                        # Compute local max index
+                        local_max_idx = max_indices[b, c, i * W_out + j]
+                        h_offset = local_max_idx // self.kernel_size[1]
+                        w_offset = local_max_idx % self.kernel_size[1]
+
+                        # Accumulate gradient
+                        grad_input[b, c, h_start + h_offset, w_start + w_offset] += grad_output[b, c, i, j]
+
+        return grad_input
 
 class batchnorm1d(Layer):
     def __init__(self, dim, activation="none", initialize_type="zero", dropout=None):
