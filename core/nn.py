@@ -12,7 +12,7 @@ import time
 
 
 class Layer:
-    def __init__(self,activation="none", initialize_type="he"):
+    def __init__(self,activation="none", initialize_type="he",optimizer=None):
         """
         
         """
@@ -30,6 +30,7 @@ class Layer:
         self.Accumelated_Gsquare_b = None
         self.t = 1 #used in ADAM and NADAM
         self.eps = 1e-7
+        self.optimizer = opt.Optimizer.get_optimizer(optimizer)
         # self.dropout = None
     def forward():
         pass
@@ -63,7 +64,7 @@ class Layer:
     
 
 class Linear(Layer):
-    def __init__(self, dims: tuple, activation="none", initialize_type="he", dropout=None):
+    def __init__(self, dims: tuple, activation="none", initialize_type="random", dropout=None,optimizer="sgd"):
         """
         Initialize a linear layer.
 
@@ -73,7 +74,7 @@ class Linear(Layer):
             initialize_type (str, optional): Weight initialization method. Defaults to "he".
             dropout (float, optional): Dropout rate. Defaults to None.
         """
-        super().__init__(activation, initialize_type)
+        super().__init__(activation, initialize_type,optimizer=optimizer)
         self.input_dim, self.output_dim = dims
         self.weights, self.bias = self.initialize_weights(dims, initialize_type)
         print("weights",self.weights.shape)
@@ -112,8 +113,8 @@ class Linear(Layer):
             self.input = self.input.reshape(B, -1)  # Flatten to [B, C*H*W]
         elif self.input.ndim != 2:  # If input is not 2D or 4D, raise an error
             raise ValueError(f"Linear layer received input of unsupported shape {self.input.shape}")
-        self.z = (self.input @ self.weights) + self.bias  # Linear transformation
-        self.out = self.activation.forward(self.z)  # Apply activation
+        self.out = (self.input @ self.weights) + self.bias  # Linear transformation
+       
 
         # Apply dropout during training
         if self.dropout is not None and not test:
@@ -122,7 +123,7 @@ class Linear(Layer):
             self.out /= (1 - self.dropout)
 
         # print("output_of_forward",self.out.shape)
-        # end_time = time.time()
+        # 
         # print(f"Linear forward took {end_time - start_time:.4f}")
         return self.out
 
@@ -131,13 +132,13 @@ class Linear(Layer):
         l1 = kwargs.get('l1', None)
         l2 = kwargs.get('l2', None)
     
-        da_dz = self.activation.backward(self.z)
+        # da_dz = self.activation.backward(self.z)
         batch_size = error_wrt_output.shape[0]
         # Gradient of loss w.r.t. pre-activation (z)
-        d_z = error_wrt_output * da_dz
+        # d_z = error_wrt_output * da_dz
 
         # Gradient of loss w.r.t. weights
-        self.grad_w = np.dot(self.input.T, d_z)
+        self.grad_w = np.dot(self.input.T, error_wrt_output)
         if l1 is not None:
             self.grad_w += (l1*np.sign(self.weights))
 
@@ -145,22 +146,22 @@ class Linear(Layer):
             self.grad_w += (l2*self.weights)
 
         # Gradient of loss w.r.t. bias
-        self.grad_b = np.sum(d_z, axis=0, keepdims=True)
+        self.grad_b = np.sum(error_wrt_output, axis=0, keepdims=True)
 
         # print("grad_w",self.grad_w)
         # Gradient of loss w.r.t. input
-        self.loss_wrt_input = np.dot(d_z, self.weights.T)
+        self.loss_wrt_input = np.dot(error_wrt_output, self.weights.T)
 
         assert self.grad_w.shape == self.weights.shape
         assert self.grad_b.shape == self.bias.shape
         assert self.loss_wrt_input.shape == self.input.shape
-        # end_time = time.time()
+        # 
         # print(f"Linear backward took {end_time - start_time:.4f}")
         return self.loss_wrt_input
 
 class Conv2d(Layer):
-    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0):
-        super().__init__()
+    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0,optimizer="adam"):
+        super().__init__(optimizer=optimizer)
         self.input_channels = input_channels
         self.output_channels = output_channels
         self.kernel_size = kernel_size
@@ -171,10 +172,10 @@ class Conv2d(Layer):
         
         self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size) #(number of filters, number of channels, filter height, filter width)
 
-        self.weights = np.random.randn(*self.kernels_shape)
+        std = np.sqrt(2.0 / (self.input_channels * self.kernel_size * self.kernel_size))
+        self.weights = np.random.randn(*self.kernels_shape) * std
         self.grad_w = np.zeros_like(self.weights)
-        self.bias  = np.random.randn(self.output_channels)
-        self.bias = self.bias.reshape(1, -1,1,1)
+        self.bias  = np.random.randn(1,self.output_channels,1,1)
         self.grad_b = np.zeros_like(self.bias)
         self.momentum_w = np.zeros(self.kernels_shape)
         self.momentum_b = np.zeros_like(self.bias)
@@ -183,78 +184,60 @@ class Conv2d(Layer):
 
 
     def forward(self, input, test=False):
-        # start_time = time.time()
         if input.ndim != 4:
             raise ValueError(f"Expected 4D input (batch_size, channels, height, width), got shape {input.shape}")
         if input.shape[1] != self.input_channels:
             raise ValueError(f"Expected {self.input_channels} input channels, got {input.shape[1]}")
 
         self.input = input
-        batch_size,channels,h_in,w_in = input.shape
 
-        # Output Dims
-        h_out = ((h_in + 2 * self.padding - self.kernel_size) // self.stride) + 1
-        w_out = ((w_in + 2 * self.padding - self.kernel_size) // self.stride) + 1
+        self.output, self.col_matrix = self.convolver.convolve(self.input, self.weights, stride=self.stride, padding=self.padding)
 
-        # Output Tensor
-        output = np.zeros((batch_size, self.output_channels, h_out, w_out))
-
-        # Processing Batch
-        output = self.convolver.convolve(self.input, self.weights, self.stride, self.padding)
-
-        self.output = output
         self.output += self.bias  # Add biases to each output channel
-        # end_time = time.time()
-        # print(f"conv forward took {end_time - start_time:.4f}")
+
         return self.output
 
-    def backward(self, output_grad,**kwargs):
-        # start_time = time.time()
-        B, C, H, W = self.input.shape
-        B, F, H_out, W_out = output_grad.shape
-        _, C_k, H_k, W_k = self.weights.shape
-        output_grad.reshape(self.output.shape)
-        #grad wrt biases
-        self.grad_b = self.dBiases = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)
 
-        assert self.dBiases.shape == self.bias.shape
-       #grad wrt kernels [we multiply the gradient of each filter with the corresponding patch that was multipled by the filter in the forward pass] 
-        col_matrix, _, _ = self.convolver._im2col(self.input, (C_k, H_k, W_k), self.stride, self.padding)
-       #col_matrix is of shape (B*H_out*W_out, C*H_k*W_k) (number of patches, number of elements in each patch)
-        grad_reshaped = output_grad.reshape(F, -1)  
-        #grad_reshaped is of shape (F, B*H_out*W_out) (number of filters, number of patches)
-       
-
-        #how each patch contributed to each filter
-        grad_kernel_matrix = grad_reshaped @ col_matrix
-
-        #reshape to original Filter shape
-        self.grad_w = self.dKernels = grad_kernel_matrix.reshape(F, C_k, H_k, W_k)
-
-        assert self.dKernels.shape == self.weights.shape
-
-        #flip kernels and transpose to make the output channels of the convolution matches the input channels
-        flipped_kernels = np.flip(self.weights, axis=(2, 3)).transpose(1, 0, 2, 3)
-
-
-        # padd to compensate padding in the forward
-        pad_h = (self.kernel_size - 1 - self.padding)
-        pad_w = (self.kernel_size - 1 - self.padding)
-        if self.stride > 1:
-            pad_h += (self.stride - 1)
-            pad_w += (self.stride - 1)
-
+    def backward(self, output_grad, **kwargs):
+        B,F,H_out,W_out = self.output.shape
+        # Gradient wrt biases
+        output_grad = output_grad.reshape(self.output.shape)
+        self.grad_b = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)
+        assert self.grad_b.shape == self.bias.shape
         
-       
-        #pad output_grad
-        output_grad_padded = np.pad(output_grad,((0, 0), (0, 0), (pad_h, pad_h), (pad_w, pad_w)),mode='constant')
-        #gradient wrt input (prev layer output)
-        dInput = self.convolver.convolve(output_grad_padded,flipped_kernels,stride=1,padding=0)
+        # Gradient wrt weights
+        grad_reshaped = output_grad.transpose(1, 0, 2, 3).reshape(self.output_channels, -1)  # Shape: (F, B * H_out * W_out)
+        grad_kernel_matrix = grad_reshaped @ self.col_matrix  # Use cached `col_matrix`
+        self.grad_w = grad_kernel_matrix.reshape(self.output_channels, self.input_channels, self.kernel_size, self.kernel_size)
+        assert self.grad_w.shape == self.weights.shape
         
+        # Gradient wrt input
+        kernel_matrix = self.weights.reshape(self.output_channels, -1).T  # shape: (C*k*k, F)
+        # Compute dX_col from output_grad:
+        # First, reshape output_grad as (B*H_out*W_out, F)
+        dout_matrix = output_grad.transpose(0, 2, 3, 1).reshape(B * H_out * W_out, F)
+        # dX_col = dout_matrix @ kernel_matrix.T  => shape: (B*H_out*W_out, C*k*k)
+        dX_col = dout_matrix @ kernel_matrix.T
+
+        # Now, use col2im_accumulation to fold dX_col back to the padded input shape.
+        dInput_padded = self.convolver.col2im_accumulation(
+            dX_col=dX_col,
+            input_shape=self.input.shape, 
+            filter_height=self.kernel_size,
+            filter_width=self.kernel_size,
+            stride=self.stride,
+            padding=self.padding
+        )
+        # Remove the padding to recover gradient w.r.t. the original input.
+        if self.padding > 0:
+            dInput = dInput_padded[:, :, self.padding:-self.padding, self.padding:-self.padding]
+        else:
+            dInput = dInput_padded
+
         assert dInput.shape == self.input.shape
-        # end_time = time.time()
-        # print(f"conv backward took {end_time - start_time:.4f}")
         return dInput
+
+
 
 class MaxPool2d:
     def __init__(self, kernel_size, stride=None, padding=0):
@@ -303,7 +286,7 @@ class MaxPool2d:
             windows.shape,
             (stride_h, stride_w)
         )
-        # end_time = time.time()
+        # 
         # print(f"maxpool forward took {end_time - start_time:.4f}")
         return output
 
@@ -334,7 +317,7 @@ class MaxPool2d:
 
                         # Accumulate gradient
                         grad_input[b, c, h_start + h_offset, w_start + w_offset] += grad_output[b, c, i, j]
-        # end_time = time.time()
+        # 
         # print(f"maxpool forward took {end_time - start_time:.4f}")
         return grad_input
 
@@ -422,20 +405,29 @@ class Network:
         self.l2=None
         self.t=0
         self.featuremaps=[]
+        self.forward_time=[]
+        self.backward_time=[]
+        self.loss_time=[]
+        self.conv_forward_time=[]
+        self.conv_backward_time=[]
+        self.pool_forward_time=[]
+        self.pool_backward_time=[]
 
 
-    def forward(self, X, test=False):
+    def forward(self, X, test=False,visualize=False):
         for layer in self.layers:
             X = layer.forward(X, test)
-            if isinstance(layer,Conv2d) and test==True:
-                self.featuremaps.append(X)
+            if isinstance(layer,Conv2d) and visualize==True:
+                self.featuremaps.append(layer.output)
         self.last_out = X
 
 
     def backward(self, error_grad):
         self.t+=1
         for layer in reversed(self.layers):
+            
             error_grad = layer.backward(error_grad,l1=self.l1,l2=self.l2)
+            
             # print("error_grad",error_grad)
             if isinstance(layer,Layer):
                 self.optimizer_step(layer)
@@ -446,6 +438,7 @@ class Network:
             raise ValueError("layer must be an instance of Layer class")
         
         self.optimizer(layer)
+        # layer.optimizer(layer)
 
 
 
@@ -479,46 +472,48 @@ class Network:
         
         # Initialize losses for tracking
         self.losses = []  # Store average loss per epoch
+        
+        # Ensure input format
         if isinstance(self.layers[0], Conv2d) and x_train.ndim == 2:
-                side = int(np.sqrt(x_train.shape[1]))
-                x_train = x_train.reshape(-1, 1, side, side)
-                y_train = self.one_hot_encode(y_train, num_classes=y_train.max() + 1)
+            side = int(np.sqrt(x_train.shape[1]))
+            x_train = x_train.reshape(-1, 1, side, side)
+            y_train = self.one_hot_encode(y_train, num_classes=y_train.max() + 1)
+        # Convert labels to one-hot if needed
+        
+        
         # Create Dataset instance
         dataset = Dataset(x_train, y_train, batch_size, shuffle=shuffle)
 
         for epoch in range(1, epochs + 1):
-            # Reset dataset (shuffle indices if shuffle=True)
-            dataset.reset()
+            dataset.reset()  # Shuffle if needed
             epoch_loss = 0.0
-            batches_len = 0
+            total_samples = 0  # Track total processed samples
 
-            # Iterate over batches using the Dataset
-            # cnt=0
             for X_batch, y_batch in dataset:
-                # if cnt==1:
-                #     raise ValueError("one iteration")
-                # cnt+=1
-
+                batch_size_actual = len(y_batch)  # May be smaller in last batch
+                
                 # Forward pass
                 self.forward(X_batch, test=False)
                 
                 # Compute loss and gradient
                 batch_loss, error_grad = ls.sparse_categorical_cross_entropy(y_batch, self.last_out, axis=1)
-                epoch_loss += batch_loss
-                batches_len += 1
-
+                
+                # Scale loss properly
+                epoch_loss += batch_loss * batch_size_actual
+                total_samples += batch_size_actual
+                
                 # Backward pass and parameter update
+                
                 self.backward(error_grad)
 
-            # Calculate average epoch loss
-            avg_epoch_loss = epoch_loss / batches_len
+            # Compute average epoch loss (like PyTorch)
+            avg_epoch_loss = epoch_loss / total_samples
             self.losses.append(avg_epoch_loss)
 
             # Verbose logging
             if verbose:
                 percent = (epoch / epochs) * 100
-                bar = '||' * int(percent // 2) + '-' * (50 - int(percent // 2))
-                print(f'\rEpoch {epoch}/{epochs} | [{bar}] {percent:.2f}% | Train Loss = {avg_epoch_loss:.4f}', end='')
+                print(f'\rEpoch {epoch}/{epochs}| Epoch Loss = {avg_epoch_loss:.4f}')
 
         print()
 
@@ -540,3 +535,50 @@ class Network:
         self.forward(X, test=True)
         out = self.last_out
         return out
+    
+
+    def visualize_feature_maps(self, image):
+        # Preprocess input
+        if image.ndim == 2:
+            image = image[np.newaxis, np.newaxis, :, :]
+        elif image.ndim == 3:
+            image = image[np.newaxis, :, :, :]
+        elif image.ndim == 4 and image.shape[0] != 1:
+            raise ValueError("Only single image batches are supported.")
+        
+        self.featuremaps = []
+        self.forward(image, test=True, visualize=True)
+        
+        num_conv_layers = len(self.featuremaps)
+        if num_conv_layers == 0:
+            print("No convolutional layers found.")
+            return
+
+        # Create a separate figure for each convolutional layer
+        for layer_idx, fm in enumerate(self.featuremaps):
+            fm = fm[0]  # Remove batch dimension -> (C, H, W)
+            num_channels = fm.shape[0]
+            
+            # Create a new figure for this layer
+            plt.figure(figsize=(16, 8))
+            plt.suptitle(f"Layer {layer_idx+1} Feature Maps", fontsize=14, y=1.02)
+            
+            # Calculate grid dimensions
+            cols = 8  # Max 8 filters per row
+            rows = int(np.ceil(num_channels / cols))
+            
+            # Plot each channel
+            for channel_idx in range(num_channels):
+                plt.subplot(rows, cols, channel_idx + 1)
+                channel_data = fm[channel_idx]
+                
+                # Normalize to [0, 1] for better contrast
+                channel_data = (channel_data - channel_data.min()) / (channel_data.max() - channel_data.min() + 1e-8)
+                
+                plt.imshow(channel_data, cmap='gray')
+                plt.axis('off')
+                plt.title(f'Ch{channel_idx+1}', fontsize=8)
+            
+            plt.tight_layout(pad=1.0, w_pad=0.5, h_pad=1.0)  # Increase spacing
+            plt.show()  # Show layer-specific figure (will create multiple windows)
+            

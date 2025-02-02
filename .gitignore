@@ -3,3 +3,5 @@
 *.pyo
 __pycache__/
 mainTests.py
+data/
+testt.py

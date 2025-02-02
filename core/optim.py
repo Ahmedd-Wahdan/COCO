@@ -126,6 +126,8 @@ class sgd(Optimizer):
             learning_rate (float): Step size for the update.
             clip_value (float): Maximum allowed value for gradients (gradient clipping).
         """
+        if np.all(layer.grad_w == 0):
+            raise ValueError("Gradient is zero")
         layer.grad_w = np.clip(layer.grad_w, -clip_value, clip_value) if clip_value else layer.grad_w
         layer.weights -= learning_rate * layer.grad_w
         layer.bias -= learning_rate * layer.grad_b

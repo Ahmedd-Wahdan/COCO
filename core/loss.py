@@ -22,10 +22,11 @@ def sparse_categorical_cross_entropy(Y, last_out, axis=1):
 
     B = last_out.shape[0]
 
+    epsilon = 1e-12  # To avoid log(0)
 
-    return -np.mean(np.sum(Y_dense * np.log(last_out), axis=1), axis=0), (last_out - Y_dense)/B
+    return -np.mean(np.sum(Y_dense * np.log(last_out+epsilon), axis=1), axis=0), (last_out - Y_dense)/B
 
 
 def mean_squared_error(Y,last_out):
     B = last_out.shape[0]
-    return np.mean(np.square(Y - last_out)), ((last_out - Y)*last_out)/B
+    return np.mean(np.square(Y - last_out)), 2*((last_out - Y)*last_out)/B

@@ -38,7 +38,7 @@ class Activation:
             return softmax()
         elif activation_name == "leaky_relu":
             return leaky_relu()
-        elif activation_name == "none":
+        elif activation_name == "none" or activation_name == None:
             return no_activation()
         else:
             raise ValueError(f"Unknown activation function: {activation_name}")
@@ -73,7 +73,8 @@ class tanh(Activation):
         Returns:
             ndarray: Gradient after applying the derivative of tanh.
         """
-        return grad * (1 - np.tanh(self.output) ** 2)
+        return grad * (1 - self.output ** 2)
+
 
 
 class sigmoid(Activation):
@@ -112,7 +113,7 @@ class softmax(Activation):
     Softmax activation function.
     """
 
-    def forward(self, x, axis=1):
+    def forward(self, x, axiss=1):
         """
         Forward pass of the softmax activation function.
 
@@ -123,17 +124,18 @@ class softmax(Activation):
         Returns:
             ndarray: Transformed tensor where values sum to 1 along the specified axis.
         """
-        exp_x = np.exp(x - np.max(x, axis=axis, keepdims=True))  # Numerical stability
-        return exp_x / np.sum(exp_x, axis=axis, keepdims=True)
+        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))  # Numerical stability
+        self.output = exp_x / np.sum(exp_x, axis=1, keepdims=True)
+        return self.output
 
-    def backward(self, x):
+    def backward(self, grad, **args):
         """
         Backward pass for softmax is generally handled with the loss function.
 
         Returns:
             ndarray: A tensor of ones (placeholder implementation).
         """
-        return np.ones_like(x)
+        return grad
 
 
 class relu(Activation):
@@ -186,9 +188,10 @@ class leaky_relu(Activation):
         Returns:
             ndarray: Transformed tensor with small values for negatives.
         """
-        return np.where(x > 0, x, alpha * x)
+        self.output = np.where(x > 0, x, alpha * x)
+        return self.output
 
-    def backward(self, x, alpha=0.01, **args):
+    def backward(self, grad, alpha=0.01, **args):
         """
         Backward pass to compute the gradient.
 
@@ -199,8 +202,8 @@ class leaky_relu(Activation):
         Returns:
             ndarray: Gradient after applying the derivative of Leaky ReLU.
         """
-        dx = np.ones_like(x)
-        dx[x < 0] = alpha
+        dx = np.ones_like(self.output)
+        dx[self.output < 0] = alpha
         return dx
 
 
@@ -221,7 +224,7 @@ class no_activation(Activation):
         """
         return x
 
-    def backward(self, x):
+    def backward(self, grad):
         """
         Backward pass with no transformation.
 
@@ -231,4 +234,4 @@ class no_activation(Activation):
         Returns:
             ndarray: A tensor of ones (no change to gradients).
         """
-        return np.ones_like(x)
+        return grad
