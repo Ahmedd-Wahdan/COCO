@@ -8,7 +8,7 @@ It includes:
 import numpy as np
 from core import nn
 from core import optim
-
+import pickle
 
 def gradient_check(model, X, Y, loss_fn, epsilon=1e-7, threshold=1e-5):
     """
@@ -73,3 +73,15 @@ def gradient_check(model, X, Y, loss_fn, epsilon=1e-7, threshold=1e-5):
 
             diff_b = np.linalg.norm(grad_b - numerical_grad_b) / (np.linalg.norm(grad_b) + np.linalg.norm(numerical_grad_b) + 1e-15)
             print(f"Layer {layer.__class__.__name__} (Biases): Gradient Check {'PASSED' if diff_b < threshold else 'FAILED'} (diff: {diff_b:.8e})\n")
+
+
+def save_model(model, filename="model.pkl"):
+    with open(filename, "wb") as f:
+        pickle.dump(model, f)
+    print(f"Model saved as {filename}")
+
+def load_model(filename="model.pkl"):
+    with open(filename, "rb") as f:
+        model = pickle.load(f)
+    print("Model loaded successfully!")
+    return model

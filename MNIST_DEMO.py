@@ -3,7 +3,7 @@ import numpy as np
 from core.utils import load_model
 
 
-model = load_model('mnist_coco.pkl')  
+model = load_model()
 
 class MNISTGUI:
     def __init__(self, master):

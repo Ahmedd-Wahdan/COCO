@@ -278,7 +278,7 @@ class MaxPool2d:
         )
         return output
 
-    def backward(self, grad_output):
+    def backward(self, grad_output,**kwargs):
         X = self.cache['input']
         max_indices, window_shape, strides = self.cache['max_indices']
         grad_output = grad_output.reshape(*self.cache['out_shape'])
