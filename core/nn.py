@@ -245,80 +245,80 @@ class MaxPool2d:
         self.stride = stride if stride is not None else self.kernel_size
         self.stride = self.stride if isinstance(self.stride, tuple) else (self.stride, self.stride)
         self.padding = padding
-        self.convolver = FastConvolver()
         self.cache = {}
 
     def forward(self, X, test=False):
-        # start_time = time.time()
-        """Vectorized max pooling forward pass"""
         B, C, H, W = X.shape
         H_k, W_k = self.kernel_size
         stride_h, stride_w = self.stride
 
-        # Pad input
         padded_X = np.pad(
             X,
             ((0, 0), (0, 0), (self.padding, self.padding), (self.padding, self.padding)),
             mode='constant'
         )
 
-        # Extract sliding windows
         windows = sliding_window_view(padded_X, (H_k, W_k), axis=(2, 3))
         windows = windows[:, :, ::stride_h, ::stride_w, :, :]
 
-        # Compute max and indices
         max_windows = windows.reshape(B, C, -1, H_k * W_k)
         max_vals = max_windows.max(axis=-1)
         max_indices = max_windows.argmax(axis=-1)
 
-        # Reshape output to 4D
         output = max_vals.reshape(B, C, -1)
-        H_out = output.shape[-1]
-        W_out = int(np.sqrt(H_out))
-        output = output.reshape(B, C, H_out // W_out, W_out)
+        H_out = int(np.sqrt(output.shape[2]))
+        output = output.reshape(B, C, H_out, H_out)
 
-        # Store cache for backward
         self.cache['out_shape'] = output.shape
         self.cache['input'] = X
-        self.cache['windows'] = windows
         self.cache['max_indices'] = (
             max_indices,
             windows.shape,
             (stride_h, stride_w)
         )
-        # 
-        # print(f"maxpool forward took {end_time - start_time:.4f}")
         return output
 
-    def backward(self, grad_output,**kwargs):
-        # start_time = time.time()
-        """Vectorized max pooling backward pass"""
+    def backward(self, grad_output):
         X = self.cache['input']
         max_indices, window_shape, strides = self.cache['max_indices']
         grad_output = grad_output.reshape(*self.cache['out_shape'])
-        # Initialize gradient
-        grad_input = np.zeros_like(X)
         B, C, H_out, W_out = grad_output.shape
         stride_h, stride_w = strides
+        kernel_H, kernel_W = self.kernel_size
+        H_in, W_in = X.shape[2], X.shape[3]
+        padding = self.padding
 
-        # Compute gradient indices
-        for b in range(B):
-            for c in range(C):
-                for i in range(H_out):
-                    for j in range(W_out):
-                        # Compute base position
-                        h_start = i * stride_h
-                        w_start = j * stride_w
+        max_indices_4d = max_indices.reshape(B, C, H_out, W_out)
 
-                        # Compute local max index
-                        local_max_idx = max_indices[b, c, i * W_out + j]
-                        h_offset = local_max_idx // self.kernel_size[1]
-                        w_offset = local_max_idx % self.kernel_size[1]
+        # Generate all indices for B, C, H_out, W_out
+        b, c, i, j = np.indices((B, C, H_out, W_out))
 
-                        # Accumulate gradient
-                        grad_input[b, c, h_start + h_offset, w_start + w_offset] += grad_output[b, c, i, j]
-        # 
-        # print(f"maxpool forward took {end_time - start_time:.4f}")
+        # Compute starting positions and offsets
+        h_start = i * stride_h
+        w_start = j * stride_w
+        h_offset = max_indices_4d // kernel_W
+        w_offset = max_indices_4d % kernel_W
+
+        # Calculate positions in padded and original input
+        h_padded = h_start + h_offset
+        w_padded = w_start + w_offset
+        h_original = h_padded - padding
+        w_original = w_padded - padding
+
+        # Mask for valid positions within original input dimensions
+        valid = (h_original >= 0) & (h_original < H_in) & (w_original >= 0) & (w_original < W_in)
+
+        # Extract valid indices and corresponding gradients
+        valid_b = b[valid]
+        valid_c = c[valid]
+        valid_h = h_original[valid]
+        valid_w = w_original[valid]
+        valid_grad = grad_output[valid]
+
+        # Accumulate gradients using vectorized scatter-add
+        grad_input = np.zeros_like(X)
+        np.add.at(grad_input, (valid_b, valid_c, valid_h, valid_w), valid_grad)
+
         return grad_input
 
 class batchnorm1d(Layer):
