@@ -12,7 +12,7 @@ import time
 
 
 class Layer:
-    def __init__(self,activation="none", initialize_type="he",optimizer=None):
+    def __init__(self,activation="none", initialize_type="zero"):
         """
         
         """
@@ -30,7 +30,7 @@ class Layer:
         self.Accumelated_Gsquare_b = None
         self.t = 1 #used in ADAM and NADAM
         self.eps = 1e-7
-        self.optimizer = opt.Optimizer.get_optimizer(optimizer)
+        
         # self.dropout = None
     def forward():
         pass
@@ -74,7 +74,7 @@ class Linear(Layer):
             initialize_type (str, optional): Weight initialization method. Defaults to "he".
             dropout (float, optional): Dropout rate. Defaults to None.
         """
-        super().__init__(activation, initialize_type,optimizer=optimizer)
+        super().__init__(activation, initialize_type)
         self.input_dim, self.output_dim = dims
         self.weights, self.bias = self.initialize_weights(dims, initialize_type)
         print("weights",self.weights.shape)
@@ -92,8 +92,10 @@ class Linear(Layer):
         elif initialize_type == 'random':
             w = np.random.randn(input_dim, output_dim) * 0.01
         elif initialize_type == 'xavier':
-            limit = np.sqrt(6 / (input_dim + output_dim))
-            w = np.random.uniform(-limit, limit, (input_dim, output_dim))
+            fan_in = input_dim  # Number of input neurons
+            fan_out = output_dim  # Number of output neurons
+            bound = np.sqrt(6 / (fan_in + fan_out))
+            self.weights = np.random.uniform(-bound, bound, size=(input_dim, output_dim))
         elif initialize_type == 'he':
             w = np.random.randn(input_dim, output_dim) * np.sqrt(2 / input_dim)
         elif initialize_type == 'lecun':
@@ -160,27 +162,65 @@ class Linear(Layer):
         return self.loss_wrt_input
 
 class Conv2d(Layer):
-    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0,optimizer="adam"):
-        super().__init__(optimizer=optimizer)
+    def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier"):
+        super().__init__()
         self.input_channels = input_channels
         self.output_channels = output_channels
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
 
+        # Convolution operation utility
         self.convolver = FastConvolver()
-        
-        self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size) #(number of filters, number of channels, filter height, filter width)
 
-        std = np.sqrt(2.0 / (self.input_channels * self.kernel_size * self.kernel_size))
-        self.weights = np.random.randn(*self.kernels_shape) * std
+        # Shape of the weight tensor (filters)
+        self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size)
+
+        # Initialize weights and biases based on selected method
+        self.initialize_weights(initialize_type)
+
+        # Gradient storage
         self.grad_w = np.zeros_like(self.weights)
-        self.bias  = np.random.randn(1,self.output_channels,1,1)
         self.grad_b = np.zeros_like(self.bias)
-        self.momentum_w = np.zeros(self.kernels_shape)
+
+        # Momentum storage (for optimizers like Adam, Momentum SGD, etc.)
+        self.momentum_w = np.zeros_like(self.weights)
         self.momentum_b = np.zeros_like(self.bias)
-        self.Accumelated_Gsquare_w = np.zeros(self.kernels_shape)
+
+        # Storage for squared gradients (for Adam, RMSprop, etc.)
+        self.Accumelated_Gsquare_w = np.zeros_like(self.weights)
         self.Accumelated_Gsquare_b = np.zeros_like(self.bias)
+
+        self.initialize_weights(initialize_type)
+
+    def initialize_weights(self, initialize_type="xavier"):
+        """
+        Initializes weights and biases for the Conv2D layer.
+
+        Args:
+            initialize_type (str): Type of initialization ('zero', 'random', 'xavier', 'he', 'lecun')
+
+        Returns:
+            None (updates self.weights and self.bias)
+        """
+        if initialize_type == 'zero':
+            self.weights = np.zeros(self.kernels_shape)
+        elif initialize_type == 'random':
+            self.weights = np.random.randn(*self.kernels_shape) * 0.01
+        elif initialize_type == 'xavier':
+            fan_in = self.input_channels * self.kernel_size * self.kernel_size
+            fan_out = self.output_channels * self.kernel_size * self.kernel_size
+            bound = np.sqrt(6 / (fan_in + fan_out))
+            self.weights = np.random.uniform(-bound, bound, size=self.kernels_shape)
+        elif initialize_type == 'he':
+            self.weights = np.random.randn(*self.kernels_shape) * np.sqrt(2 / (self.input_channels * self.kernel_size * self.kernel_size))
+        elif initialize_type == 'lecun':
+            self.weights = np.random.randn(*self.kernels_shape) * np.sqrt(1 / (self.input_channels * self.kernel_size * self.kernel_size))
+        else:
+            raise ValueError(f"Unknown initialization method: {initialize_type}")
+
+        # Bias is usually initialized to zero
+        self.bias = np.zeros((1, self.output_channels, 1, 1))
 
 
     def forward(self, input, test=False):
@@ -513,7 +553,7 @@ class Network:
             # Verbose logging
             if verbose:
                 percent = (epoch / epochs) * 100
-                print(f'\rEpoch {epoch}/{epochs}| Epoch Loss = {avg_epoch_loss:.4f}')
+                print(f'\rEpoch {epoch}/{epochs} | Epoch Loss = {avg_epoch_loss:.4f}')
 
         print()
 
