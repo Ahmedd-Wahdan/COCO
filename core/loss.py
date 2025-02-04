@@ -2,7 +2,7 @@ import numpy as np
 
 def binary_cross_entropy(Y,last_out):
     '''
-    assumes y is of size (1,N) where N is batch size
+    assumes y is of size (B,1) where N is batch size
 
     '''
     B = last_out.shape[0]
@@ -30,3 +30,13 @@ def sparse_categorical_cross_entropy(Y, last_out, axis=1):
 def mean_squared_error(Y,last_out):
     B = last_out.shape[0]
     return np.mean(np.square(Y - last_out)), 2*((last_out - Y)*last_out)/B
+
+
+
+def get_loss_fn(loss_fn_name):
+    if loss_fn_name == 'bce':
+        return binary_cross_entropy
+    elif loss_fn_name == 'categorical_bce':
+        return sparse_categorical_cross_entropy
+    elif loss_fn_name == 'mse':
+        return mean_squared_error

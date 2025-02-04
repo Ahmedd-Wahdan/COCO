@@ -8,16 +8,19 @@ import core.loss as ls
 from core.operations import FastConvolver
 from numpy.lib.stride_tricks import sliding_window_view
 from core.Datasets import Dataset
-import time
+import inspect
+import re
 
+class Module:
+    def __init__(self):
+        pass
 
-class Layer:
-    def __init__(self,activation="none", initialize_type="zero"):
+class Layer(Module):
+    def __init__(self):
         """
         
         """
-        self.activation = fn.Activation.get_activation(activation)
-        self.initialize_type = initialize_type
+        self.initialize_type = None
         self.loss_wrt_output = None
         self.loss_wrt_input = None
         self.weights=None
@@ -38,131 +41,145 @@ class Layer:
     def backward():
         pass
 
-    def initialize_weights(self, dims,initialize_type):
-        self.momentum_w = np.zeros(dims)
-        self.momentum_b = np.zeros((1, dims[1]))
-        self.Accumelated_Gsquare_w = np.zeros(dims)
-        self.Accumelated_Gsquare_b = np.zeros((1, dims[1]))
-        input_dim, output_dim = dims
-        if initialize_type == 'zero':
-            w = np.zeros((input_dim, output_dim))
-        elif initialize_type == 'random':
-            w = np.random.randn(input_dim, output_dim) * 0.01
-        elif initialize_type == 'xavier':
-            limit = np.sqrt(6 / (input_dim + output_dim))
-            w = np.random.uniform(-limit, limit, (input_dim, output_dim))
-        elif initialize_type == 'he':
-            w = np.random.randn(input_dim, output_dim) * np.sqrt(2 / input_dim)
-        elif initialize_type == 'lecun':
-            w = np.random.randn(input_dim, output_dim) * np.sqrt(1 / input_dim)
-        else:
-            raise ValueError(f"Unknown initialization method: {initialize_type}")
-
-        b = np.zeros((1, output_dim))  # Bias is a row vector
-        return w, b
+    def initialize_weights(self, shape,initialize_type):
+        pass
 
     
 
 class Linear(Layer):
-    def __init__(self, dims: tuple, activation="none", initialize_type="random", dropout=None,optimizer="sgd"):
+    """
+    A fully connected linear layer that performs an affine transformation: 
+    output = input * weights + bias. Supports different weight initialization methods
+    and optional dropout for regularization.
+    """
+    
+    def __init__(self, shape: tuple, initialize_type="random"):
         """
-        Initialize a linear layer.
-
+        Initializes a linear layer with specified weight initialization and optional dropout.
+        
         Args:
-            dims (tuple): A tuple of (input_dim, output_dim).
-            activation (str, optional): Activation function name. Defaults to "none".
-            initialize_type (str, optional): Weight initialization method. Defaults to "he".
+            shape (tuple): A tuple of (input_dim, output_dim).
+            initialize_type (str, optional): Weight initialization method. Defaults to "random".
             dropout (float, optional): Dropout rate. Defaults to None.
         """
-        super().__init__(activation, initialize_type)
-        self.input_dim, self.output_dim = dims
-        self.weights, self.bias = self.initialize_weights(dims, initialize_type)
-        print("weights",self.weights.shape)
-        print("bias",self.bias.shape)
-        self.dropout = dropout
+        super().__init__()
+        
+        self.weights, self.bias = self.initialize_weights(shape, initialize_type)
 
-    def initialize_weights(self, dims, initialize_type):
-        self.momentum_w = np.zeros(dims)
-        self.momentum_b = np.zeros((1, dims[1]))
-        self.Accumelated_Gsquare_w = np.zeros(dims)
-        self.Accumelated_Gsquare_b = np.zeros((1, dims[1]))
-        input_dim, output_dim = dims
+
+    def initialize_weights(self, shape, initialize_type):
+        """
+        Initializes weights and biases based on the specified initialization method.
+        
+        Args:
+            shape (tuple): (input_dim, output_dim) specifying layer dimensions.
+            initialize_type (str): Initialization method (zero, random, xavier, he, lecun).
+            
+        Returns:
+            tuple: Initialized weight matrix and bias vector.
+        """
+        self.momentum_w = np.zeros(shape)
+        self.momentum_b = np.zeros((1, shape[1]))
+        self.Accumelated_Gsquare_w = np.zeros(shape)
+        self.Accumelated_Gsquare_b = np.zeros((1, shape[1]))
+
+        input_dim, output_dim = shape
+
         if initialize_type == 'zero':
             w = np.zeros((input_dim, output_dim))
+
         elif initialize_type == 'random':
             w = np.random.randn(input_dim, output_dim) * 0.01
-        elif initialize_type == 'xavier':
-            fan_in = input_dim  # Number of input neurons
-            fan_out = output_dim  # Number of output neurons
+
+        elif initialize_type == 'xavier':  # Also known as Glorot
+            fan_in, fan_out = input_dim, output_dim
             bound = np.sqrt(6 / (fan_in + fan_out))
-            self.weights = np.random.uniform(-bound, bound, size=(input_dim, output_dim))
-        elif initialize_type == 'he':
-            w = np.random.randn(input_dim, output_dim) * np.sqrt(2 / input_dim)
-        elif initialize_type == 'lecun':
-            w = np.random.randn(input_dim, output_dim) * np.sqrt(1 / input_dim)
+            w = np.random.uniform(-bound, bound, size=(input_dim, output_dim))
+
+        elif initialize_type == 'he':  # He (Kaiming) initialization for ReLU
+            std = np.sqrt(2 / input_dim)
+            w = np.random.normal(0, std, size=(input_dim, output_dim))
+
+        elif initialize_type == 'lecun':  # LeCun initialization for tanh/sigmoid
+            std = np.sqrt(1 / input_dim)
+            w = np.random.normal(0, std, size=(input_dim, output_dim))
+
         else:
             raise ValueError(f"Unknown initialization method: {initialize_type}")
 
-        b = np.zeros((1, output_dim))  # Bias is a row vector
+        b = np.zeros((1, output_dim))  # Bias is always initialized to zeros
         return w, b
 
-    def forward(self, input, test=False):
-        # start_time = time.time()
-  
+    def __call__(self, input,**kwargs):
+        """
+        Performs the forward pass of the linear layer.
+        
+        Args:
+            input (np.ndarray): Input tensor.
+            test (bool, optional): Whether the model is in test mode (disables dropout). Defaults to False.
+            
+        Returns:
+            np.ndarray: Output of the affine transformation.
+        """
         self.input = input
         if self.input.ndim == 4:  # If input is 4D (e.g., [B, C, H, W])
             B, C, H, W = self.input.shape
             self.input = self.input.reshape(B, -1)  # Flatten to [B, C*H*W]
         elif self.input.ndim != 2:  # If input is not 2D or 4D, raise an error
             raise ValueError(f"Linear layer received input of unsupported shape {self.input.shape}")
-        self.out = (self.input @ self.weights) + self.bias  # Linear transformation
-       
-
-        # Apply dropout during training
-        if self.dropout is not None and not test:
-            self.mask = (np.random.rand(*self.out.shape) < (1 - self.dropout)).astype(float)
-            self.out *= self.mask
-            self.out /= (1 - self.dropout)
-
-        # print("output_of_forward",self.out.shape)
-        # 
-        # print(f"Linear forward took {end_time - start_time:.4f}")
+        
+        self.out = (self.input @ self.weights) + self.bias  # Affine transformation
+            
+        
         return self.out
 
-    def backward(self, error_wrt_output,**kwargs):
-        # start_time = time.time()
+    def backward(self, error_wrt_output, **kwargs):
+        """
+        Performs the backward pass, computing gradients of the loss with respect to input, weights, and bias.
+        
+        Args:
+            error_wrt_output (np.ndarray): Gradient of loss with respect to layer output.
+            **kwargs: Optional L1 and L2 regularization parameters.
+        
+        Returns:
+            np.ndarray: Gradient of loss with respect to layer input.
+        """
         l1 = kwargs.get('l1', None)
         l2 = kwargs.get('l2', None)
-    
-        # da_dz = self.activation.backward(self.z)
-        batch_size = error_wrt_output.shape[0]
-        # Gradient of loss w.r.t. pre-activation (z)
-        # d_z = error_wrt_output * da_dz
-
+        
         # Gradient of loss w.r.t. weights
-        self.grad_w = np.dot(self.input.T, error_wrt_output)
-        if l1 is not None:
-            self.grad_w += (l1*np.sign(self.weights))
+        self.grad_w = self.input.T @ error_wrt_output
 
+        if l1 is not None:
+            self.grad_w += (l1 * np.sign(self.weights))
         if l2 is not None:
-            self.grad_w += (l2*self.weights)
+            self.grad_w += (l2 * self.weights)
 
         # Gradient of loss w.r.t. bias
         self.grad_b = np.sum(error_wrt_output, axis=0, keepdims=True)
-
-        # print("grad_w",self.grad_w)
+        
         # Gradient of loss w.r.t. input
-        self.loss_wrt_input = np.dot(error_wrt_output, self.weights.T)
-
+        self.loss_wrt_input = error_wrt_output @ self.weights.T
+        
         assert self.grad_w.shape == self.weights.shape
         assert self.grad_b.shape == self.bias.shape
         assert self.loss_wrt_input.shape == self.input.shape
-        # 
-        # print(f"Linear backward took {end_time - start_time:.4f}")
+        
         return self.loss_wrt_input
 
 class Conv2d(Layer):
     def __init__(self, input_channels, output_channels, kernel_size, stride=1, padding=0, initialize_type="xavier"):
+        """
+        Initializes a 2D convolutional layer.
+        
+        Args:
+            input_channels (int): Number of channels in the input tensor.
+            output_channels (int): Number of filters (output channels) in the layer.
+            kernel_size (int): Size of the square convolutional kernel.
+            stride (int, optional): Step size for moving the convolutional kernel. Defaults to 1.
+            padding (int, optional): Number of pixels to pad around the input. Defaults to 0.
+            initialize_type (str, optional): Method for initializing weights. Defaults to "xavier".
+        """
         super().__init__()
         self.input_channels = input_channels
         self.output_channels = output_channels
@@ -177,69 +194,84 @@ class Conv2d(Layer):
         self.kernels_shape = (output_channels, input_channels, kernel_size, kernel_size)
 
         # Initialize weights and biases based on selected method
-        self.initialize_weights(initialize_type)
-
-        # Gradient storage
-        self.grad_w = np.zeros_like(self.weights)
-        self.grad_b = np.zeros_like(self.bias)
-
-        # Momentum storage (for optimizers like Adam, Momentum SGD, etc.)
-        self.momentum_w = np.zeros_like(self.weights)
-        self.momentum_b = np.zeros_like(self.bias)
-
-        # Storage for squared gradients (for Adam, RMSprop, etc.)
-        self.Accumelated_Gsquare_w = np.zeros_like(self.weights)
-        self.Accumelated_Gsquare_b = np.zeros_like(self.bias)
-
-        self.initialize_weights(initialize_type)
+        self.weights, self.bias = self.initialize_weights(initialize_type)
 
     def initialize_weights(self, initialize_type="xavier"):
         """
         Initializes weights and biases for the Conv2D layer.
 
         Args:
-            initialize_type (str): Type of initialization ('zero', 'random', 'xavier', 'he', 'lecun')
+            initialize_type (str): Type of initialization ('zero', 'random', 'xavier', 'he', 'lecun').
 
         Returns:
-            None (updates self.weights and self.bias)
+            tuple: Initialized weight and bias tensors.
         """
         if initialize_type == 'zero':
-            self.weights = np.zeros(self.kernels_shape)
+            w = np.zeros(self.kernels_shape)
         elif initialize_type == 'random':
-            self.weights = np.random.randn(*self.kernels_shape) * 0.01
+            w = np.random.randn(*self.kernels_shape) * 0.01
         elif initialize_type == 'xavier':
             fan_in = self.input_channels * self.kernel_size * self.kernel_size
             fan_out = self.output_channels * self.kernel_size * self.kernel_size
             bound = np.sqrt(6 / (fan_in + fan_out))
-            self.weights = np.random.uniform(-bound, bound, size=self.kernels_shape)
+            w = np.random.uniform(-bound, bound, size=self.kernels_shape)
         elif initialize_type == 'he':
-            self.weights = np.random.randn(*self.kernels_shape) * np.sqrt(2 / (self.input_channels * self.kernel_size * self.kernel_size))
+            w = np.random.randn(*self.kernels_shape) * np.sqrt(2 / (self.input_channels * self.kernel_size * self.kernel_size))
         elif initialize_type == 'lecun':
-            self.weights = np.random.randn(*self.kernels_shape) * np.sqrt(1 / (self.input_channels * self.kernel_size * self.kernel_size))
+            w = np.random.randn(*self.kernels_shape) * np.sqrt(1 / (self.input_channels * self.kernel_size * self.kernel_size))
         else:
             raise ValueError(f"Unknown initialization method: {initialize_type}")
 
         # Bias is usually initialized to zero
-        self.bias = np.zeros((1, self.output_channels, 1, 1))
+        b = np.zeros((1, self.output_channels, 1, 1))
 
+        self.grad_w = np.zeros_like(w)
+        self.grad_b = np.zeros_like(b)
 
-    def forward(self, input, test=False):
+        # Momentum storage (for optimizers like Adam, Momentum SGD, etc.)
+        self.momentum_w = np.zeros_like(w)
+        self.momentum_b = np.zeros_like(b)
+
+        # Storage for squared gradients (for Adam, RMSprop, etc.)
+        self.Accumelated_Gsquare_w = np.zeros_like(w)
+        self.Accumelated_Gsquare_b = np.zeros_like(b)
+
+        return w, b
+
+    def __call__(self, input,**kwargs):
+        """
+        Performs the forward pass of the convolution operation.
+        
+        Args:
+            input (np.ndarray): Input tensor of shape (batch_size, input_channels, height, width).
+            test (bool, optional): Whether the model is in test mode (disables dropout). Defaults to False.
+        
+        Returns:
+            np.ndarray: Output tensor after convolution.
+        """
         if input.ndim != 4:
             raise ValueError(f"Expected 4D input (batch_size, channels, height, width), got shape {input.shape}")
         if input.shape[1] != self.input_channels:
             raise ValueError(f"Expected {self.input_channels} input channels, got {input.shape[1]}")
 
         self.input = input
-
         self.output, self.col_matrix = self.convolver.convolve(self.input, self.weights, stride=self.stride, padding=self.padding)
-
-        self.output += self.bias  # Add biases to each output channel
+        self.output += self.bias
 
         return self.output
 
-
     def backward(self, output_grad, **kwargs):
-        B,F,H_out,W_out = self.output.shape
+        """
+        Computes the backward pass of the convolution operation.
+        
+        Args:
+            output_grad (np.ndarray): Gradient of the loss with respect to the output tensor.
+        
+        Returns:
+            np.ndarray: Gradient of the loss with respect to the input tensor.
+        """
+        B, F, H_out, W_out = self.output.shape
+        
         # Gradient wrt biases
         output_grad = output_grad.reshape(self.output.shape)
         self.grad_b = np.sum(output_grad, axis=(0, 2, 3), keepdims=True)
@@ -252,14 +284,11 @@ class Conv2d(Layer):
         assert self.grad_w.shape == self.weights.shape
         
         # Gradient wrt input
-        kernel_matrix = self.weights.reshape(self.output_channels, -1).T  # shape: (C*k*k, F)
-        # Compute dX_col from output_grad:
-        # First, reshape output_grad as (B*H_out*W_out, F)
+        kernel_matrix = self.weights.reshape(self.output_channels, -1).T  # Shape: (C*k*k, F)
         dout_matrix = output_grad.transpose(0, 2, 3, 1).reshape(B * H_out * W_out, F)
-        # dX_col = dout_matrix @ kernel_matrix.T  => shape: (B*H_out*W_out, C*k*k)
         dX_col = dout_matrix @ kernel_matrix.T
 
-        # Now, use col2im_accumulation to fold dX_col back to the padded input shape.
+        # Use col2im_accumulation to fold dX_col back to the padded input shape.
         dInput_padded = self.convolver.col2im_accumulation(
             dX_col=dX_col,
             input_shape=self.input.shape, 
@@ -268,6 +297,7 @@ class Conv2d(Layer):
             stride=self.stride,
             padding=self.padding
         )
+        
         # Remove the padding to recover gradient w.r.t. the original input.
         if self.padding > 0:
             dInput = dInput_padded[:, :, self.padding:-self.padding, self.padding:-self.padding]
@@ -279,7 +309,15 @@ class Conv2d(Layer):
 
 
 
-class MaxPool2d:
+class MaxPool2d(Module):
+    """
+    Implements a 2D max pooling layer.
+
+    Args:
+        kernel_size (int or tuple): Size of the pooling window.
+        stride (int or tuple, optional): Stride of the pooling operation. Defaults to kernel_size.
+        padding (int, optional): Amount of zero-padding added to the input. Defaults to 0.
+    """
     def __init__(self, kernel_size, stride=None, padding=0):
         self.kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
         self.stride = stride if stride is not None else self.kernel_size
@@ -287,7 +325,17 @@ class MaxPool2d:
         self.padding = padding
         self.cache = {}
 
-    def forward(self, X, test=False):
+    def __call__(self, X, **kwargs):
+        """
+        Forward pass for max pooling.
+
+        Args:
+            X (np.ndarray): Input tensor of shape (batch_size, channels, height, width).
+            test (bool, optional): Whether the model is in test mode. Defaults to False.
+
+        Returns:
+            np.ndarray: Output tensor after max pooling.
+        """
         B, C, H, W = X.shape
         H_k, W_k = self.kernel_size
         stride_h, stride_w = self.stride
@@ -318,7 +366,16 @@ class MaxPool2d:
         )
         return output
 
-    def backward(self, grad_output,**kwargs):
+    def backward(self, grad_output, **kwargs):
+        """
+        Backward pass for max pooling.
+
+        Args:
+            grad_output (np.ndarray): Gradient of the loss with respect to the output.
+
+        Returns:
+            np.ndarray: Gradient of the loss with respect to the input.
+        """
         X = self.cache['input']
         max_indices, window_shape, strides = self.cache['max_indices']
         grad_output = grad_output.reshape(*self.cache['out_shape'])
@@ -361,8 +418,38 @@ class MaxPool2d:
 
         return grad_input
 
+
 class batchnorm1d(Layer):
+    """
+    Implements Batch Normalization for 1D input.
+    This layer normalizes the input batch-wise, stabilizing the training and improving convergence speed.
+    
+    Attributes:
+        eps (float): Small constant for numerical stability.
+        betanorm (float): Momentum factor for moving averages.
+        input_normalized (np.ndarray or None): Stores the normalized input.
+        input (np.ndarray or None): Stores the original input for backward pass.
+        mean (np.ndarray or None): Stores the mean of the batch.
+        var (np.ndarray or None): Stores the variance of the batch.
+        running_mean (np.ndarray): Running mean used during inference.
+        running_variance (np.ndarray): Running variance used during inference.
+        weights (np.ndarray): Scaling factor (gamma).
+        bias (np.ndarray): Shift factor (beta).
+        momentum_w (np.ndarray): Momentum storage for weight updates.
+        momentum_b (np.ndarray): Momentum storage for bias updates.
+        Accumelated_Gsquare_w (np.ndarray): Storage for squared weight gradients.
+        Accumelated_Gsquare_b (np.ndarray): Storage for squared bias gradients.
+    """
     def __init__(self, dim, activation="none", initialize_type="zero", dropout=None):
+        """
+        Initializes the BatchNorm1D layer.
+        
+        Args:
+            dim (int): Number of input features.
+            activation (str, optional): Activation type (default is "none").
+            initialize_type (str, optional): Initialization method (default is "zero").
+            dropout (float, optional): Dropout rate (not used in batch norm).
+        """
         super().__init__()
         self.eps = 1e-5
         self.input_normalized = None
@@ -373,42 +460,75 @@ class batchnorm1d(Layer):
         self.initialize_weights(dim, initialize_type)
 
     def initialize_weights(self, dims, initialize_type):
+        """
+        Initializes weights and bias parameters.
+        
+        Args:
+            dims (int): Number of input features.
+            initialize_type (str): Type of initialization (not used for batch norm).
+        """
         self.running_mean = np.zeros((1, dims))
         self.running_variance = np.ones((1, dims))
-        self.weights = np.ones((1, dims))  # Initialize gamma to 1
-        self.bias = np.zeros((1, dims))  # Initialize beta to 0
+        self.weights = np.ones((1, dims))  # Gamma initialized to 1
+        self.bias = np.zeros((1, dims))  # Beta initialized to 0
         self.momentum_w = np.zeros((1, dims))
         self.momentum_b = np.zeros((1, dims))
         self.Accumelated_Gsquare_w = np.zeros((1, dims))
         self.Accumelated_Gsquare_b = np.zeros((1, dims))
+        
 
-    def forward(self, input, test=False):
+    def __call__(self, input,test=False,**kwargs):
+        """
+        Forward pass of batch normalization.
+        
+        Args:
+            input (np.ndarray): Input tensor of shape (batch_size, features).
+            test (bool, optional): If True, uses running statistics for inference.
+
+        Returns:
+            np.ndarray: Normalized and scaled output tensor.
+        """
         self.input = input
         if not test:
             self.mean = np.mean(self.input, axis=0, keepdims=True)
             self.var = np.var(self.input, axis=0, keepdims=True)
             
-            # Update running mean and variance using exponential moving average
+            # Update running statistics using exponential moving average
             self.running_variance = (self.betanorm * self.running_variance) + ((1 - self.betanorm) * self.var)
             self.running_mean = (self.betanorm * self.running_mean) + ((1 - self.betanorm) * self.mean)
             
             # Normalize input
             self.input_normalized = (self.input - self.mean) / np.sqrt(self.var + self.eps)
             
-            # Scale and shift with gamma and beta
+            # Apply scale and shift
             self.out = self.weights * self.input_normalized + self.bias
-        else:  # Use running statistics during inference
+        else:
+            # Use precomputed running statistics during inference
             self.input_normalized = (self.input - self.running_mean) / np.sqrt(self.running_variance + self.eps)
             self.out = self.weights * self.input_normalized + self.bias
         
         return self.out
 
-    def backward(self, error_wrt_output,l1,l2):
+    def backward(self, error_wrt_output,**kwargs):
+        """
+        Backward pass for batch normalization.
+        
+        Args:
+            error_wrt_output (np.ndarray): Gradient of the loss with respect to output.
+            l1 (float): L1 regularization coefficient (not used in batch norm).
+            l2 (float): L2 regularization coefficient (not used in batch norm).
+        
+        Returns:
+            np.ndarray: Gradient with respect to input.
+        """
         batch_size = error_wrt_output.shape[0]
 
-        # Gradient with respect to gamma (weights) and beta (bias)
-        normalized_input_grad = error_wrt_output * self.weights  # Gradients wrt γ (scale)
-        variance_grad = np.sum(normalized_input_grad * (self.input - self.mean) * (-0.5) * np.power((self.var + self.eps), -1.5), axis=0, keepdims=True)
+        # Gradient w.r.t. gamma (weights) and beta (bias)
+        normalized_input_grad = error_wrt_output * self.weights  # Gradients w.r.t. gamma (scale)
+        variance_grad = np.sum(
+            normalized_input_grad * (self.input - self.mean) * (-0.5) * np.power((self.var + self.eps), -1.5),
+            axis=0, keepdims=True
+        )
         mean_grad = np.sum(normalized_input_grad * (-1 / np.sqrt(self.var + self.eps)), axis=0, keepdims=True) + (
             variance_grad * np.mean(-2 * (self.input - self.mean), axis=0, keepdims=True)
         )
@@ -419,206 +539,9 @@ class batchnorm1d(Layer):
             (mean_grad / batch_size)
         )
 
-        
         self.grad_w = np.sum(error_wrt_output * self.input_normalized, axis=0, keepdims=True)
         self.grad_b = np.sum(error_wrt_output, axis=0, keepdims=True) / batch_size
 
         return self.loss_wrt_input
+
         
-
-
-    
-    
-class Network:
-    def __init__(self, Layers,classification=False):
-        self.layers = Layers
-        self.classification = classification
-        self.losses = []
-        self.train_loss = 0
-        self.val_loss = 0
-        self.learning_rate=0.001
-        self.beta1=0.9
-        self.beta2=0.999
-        self.EMA=False
-        self.clip_value=10
-        self.l1=None
-        self.l2=None
-        self.t=0
-        self.featuremaps=[]
-        self.forward_time=[]
-        self.backward_time=[]
-        self.loss_time=[]
-        self.conv_forward_time=[]
-        self.conv_backward_time=[]
-        self.pool_forward_time=[]
-        self.pool_backward_time=[]
-
-
-    def forward(self, X, test=False,visualize=False):
-        for layer in self.layers:
-            X = layer.forward(X, test)
-            if isinstance(layer,Conv2d) and visualize==True:
-                self.featuremaps.append(layer.output)
-        self.last_out = X
-
-
-    def backward(self, error_grad):
-        self.t+=1
-        for layer in reversed(self.layers):
-            
-            error_grad = layer.backward(error_grad,l1=self.l1,l2=self.l2)
-            
-            # print("error_grad",error_grad)
-            if isinstance(layer,Layer):
-                self.optimizer_step(layer)
-
-
-    def optimizer_step(self,layer):
-        if not isinstance(layer,Layer):
-            raise ValueError("layer must be an instance of Layer class")
-        
-        self.optimizer(layer)
-        # layer.optimizer(layer)
-
-
-
-    def one_hot_encode(labels, num_classes=None):
-        if labels.ndim == 2:
-        # Check if all rows have exactly one `1` and the rest `0`
-            is_one_hot = np.all(np.isin(labels, [0, 1])) and np.all(labels.sum(axis=1) == 1)
-        if num_classes is not None:
-            is_one_hot = is_one_hot and (labels.shape[1] == num_classes)
-        if is_one_hot:
-            return labels.astype(int)  # Ensure integer type
-    
-        # Proceed to encode if not one-hot
-        if num_classes is None:
-            num_classes = np.max(labels) + 1  # Infer from integer labels
-        return np.eye(num_classes, dtype=int)[labels]
-    @timing_decorator
-    def train(
-        self, x_train, y_train, epochs=10, batch_size=32, learning_rate=0.001, 
-        classification=True, verbose=True, L1=0, L2=0, optimizer="momentum", 
-        beta1=0.9, beta2=0.999, EMA=False, clip_value=10, shuffle=True
-    ):
-        self.learning_rate = learning_rate
-        self.beta1 = beta1
-        self.beta2 = beta2
-        self.EMA = EMA
-        self.clip_value = clip_value
-        self.l1 = L1
-        self.l2 = L2
-        self.optimizer = opt.Optimizer.get_optimizer(optimizer)
-        
-        # Initialize losses for tracking
-        self.losses = []  # Store average loss per epoch
-        
-        # Ensure input format
-        if isinstance(self.layers[0], Conv2d) and x_train.ndim == 2:
-            side = int(np.sqrt(x_train.shape[1]))
-            x_train = x_train.reshape(-1, 1, side, side)
-            y_train = self.one_hot_encode(y_train, num_classes=y_train.max() + 1)
-        # Convert labels to one-hot if needed
-        
-        
-        # Create Dataset instance
-        dataset = Dataset(x_train, y_train, batch_size, shuffle=shuffle)
-
-        for epoch in range(1, epochs + 1):
-            dataset.reset()  # Shuffle if needed
-            epoch_loss = 0.0
-            total_samples = 0  # Track total processed samples
-
-            for X_batch, y_batch in dataset:
-                batch_size_actual = len(y_batch)  # May be smaller in last batch
-                
-                # Forward pass
-                self.forward(X_batch, test=False)
-                
-                # Compute loss and gradient
-                batch_loss, error_grad = ls.sparse_categorical_cross_entropy(y_batch, self.last_out, axis=1)
-                
-                # Scale loss properly
-                epoch_loss += batch_loss * batch_size_actual
-                total_samples += batch_size_actual
-                
-                # Backward pass and parameter update
-                
-                self.backward(error_grad)
-
-            # Compute average epoch loss (like PyTorch)
-            avg_epoch_loss = epoch_loss / total_samples
-            self.losses.append(avg_epoch_loss)
-
-            # Verbose logging
-            if verbose:
-                percent = (epoch / epochs) * 100
-                print(f'\rEpoch {epoch}/{epochs} | Epoch Loss = {avg_epoch_loss:.4f}')
-
-        print()
-
-
-
-    def plot_loss(self):
-
-        plt.plot(self.losses)
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Loss Curve')
-        plt.ylim(0)
-        plt.show()
-    def predict(self, X):
-        """
-        RETURNS: LOGITS (BATCH_SIZE,NUM_CLASSES)
-        
-        """
-        self.forward(X, test=True)
-        out = self.last_out
-        return out
-    
-
-    def visualize_feature_maps(self, image):
-        # Preprocess input
-        if image.ndim == 2:
-            image = image[np.newaxis, np.newaxis, :, :]
-        elif image.ndim == 3:
-            image = image[np.newaxis, :, :, :]
-        elif image.ndim == 4 and image.shape[0] != 1:
-            raise ValueError("Only single image batches are supported.")
-        
-        self.featuremaps = []
-        self.forward(image, test=True, visualize=True)
-        
-        num_conv_layers = len(self.featuremaps)
-        if num_conv_layers == 0:
-            print("No convolutional layers found.")
-            return
-
-        # Create a separate figure for each convolutional layer
-        for layer_idx, fm in enumerate(self.featuremaps):
-            fm = fm[0]  # Remove batch dimension -> (C, H, W)
-            num_channels = fm.shape[0]
-            
-            # Create a new figure for this layer
-            plt.figure(figsize=(16, 8))
-            plt.suptitle(f"Layer {layer_idx+1} Feature Maps", fontsize=14, y=1.02)
-            
-            # Calculate grid dimensions
-            cols = 8  # Max 8 filters per row
-            rows = int(np.ceil(num_channels / cols))
-            
-            # Plot each channel
-            for channel_idx in range(num_channels):
-                plt.subplot(rows, cols, channel_idx + 1)
-                channel_data = fm[channel_idx]
-                
-                # Normalize to [0, 1] for better contrast
-                channel_data = (channel_data - channel_data.min()) / (channel_data.max() - channel_data.min() + 1e-8)
-                
-                plt.imshow(channel_data, cmap='gray')
-                plt.axis('off')
-                plt.title(f'Ch{channel_idx+1}', fontsize=8)
-            
-            plt.tight_layout(pad=1.0, w_pad=0.5, h_pad=1.0)  # Increase spacing
-            plt.show()  # Show layer-specific figure (will create multiple windows)
-            

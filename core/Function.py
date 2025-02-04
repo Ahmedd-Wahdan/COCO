@@ -1,71 +1,101 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+@staticmethod
+def get_activation(activation_name):
+    """
+    Retrieve an activation function instance based on its name.
+
+    Args:
+        activation_name (str): Name of the activation function.
+
+    Returns:
+        Activation: Instance of the corresponding activation function class.
+
+    Raises:
+        ValueError: If the activation function name is not recognized.
+    """
+    if activation_name is None:
+        return no_activation()
+    elif activation_name == "relu":
+        return relu()
+    elif activation_name == "sigmoid":
+        return sigmoid()
+    elif activation_name == "tanh":
+        return tanh()
+    elif activation_name == "softmax":
+        return softmax()
+    elif activation_name == "leaky_relu":
+        return leaky_relu()
+    elif activation_name == "none" or activation_name == None:
+        return no_activation()
+    else:
+        raise ValueError(f"Unknown activation function: {activation_name}")
+    
+
 class Activation:
     """
-    A utility class to fetch activation function objects by name.
-    """
-
-    @staticmethod
-    def get_activation(activation_name):
+    Base class for activation functions.
+    """    
+    
+    def __init__(self, dropout=None):
         """
-        Get an activation function instance by its name.
+        Initialize the activation function with optional dropout.
 
         Args:
-            activation_name (str): Name of the activation function. Supported names are:
-                - "relu"
-                - "sigmoid"
-                - "tanh"
-                - "softmax"
-                - "leaky_relu"
-                - "none" (no activation function)
-
-        Returns:
-            Activation: An instance of the corresponding activation function class.
-
-        Raises:
-            ValueError: If the activation_name is not recognized.
+            dropout (float, optional): Dropout rate. Defaults to None.
         """
-        if activation_name is None:
-            return no_activation()
-        elif activation_name == "relu":
-            return relu()
-        elif activation_name == "sigmoid":
-            return sigmoid()
-        elif activation_name == "tanh":
-            return tanh()
-        elif activation_name == "softmax":
-            return softmax()
-        elif activation_name == "leaky_relu":
-            return leaky_relu()
-        elif activation_name == "none" or activation_name == None:
-            return no_activation()
-        else:
-            raise ValueError(f"Unknown activation function: {activation_name}")
+        self.dropout = dropout
+        self.output = None
+        self.test=False
+
+    def to_train(self):
+        self.test = False
+
+    def to_eval(self):
+        self.test = True
+
+    def apply_dropout(self):
+        """
+        Apply dropout to the output if dropout is set and not in test mode.
+
+        Args:
+            test (bool): Flag to indicate test mode (dropout is not applied in test mode).
+        """
+        if self.dropout is not None and not self.test:
+            self.mask = (np.random.rand(*self.output.shape) < (1 - self.dropout)).astype(float)
+            self.output *= self.mask
+            self.output /= (1 - self.dropout)
 
 
 class tanh(Activation):
     """
     Hyperbolic tangent activation function.
     """
+    def __init__(self, dropout=None):
+        super().__init__(dropout)
 
-    def forward(self, x, test=False, **args):
+    def __call__(self, x, **args):
         """
-        Forward pass of the tanh activation function.
+        Compute the __call__ pass using the tanh function.
 
         Args:
             x (ndarray): Input tensor.
             test (bool, optional): Flag for test mode. Defaults to False.
 
         Returns:
-            ndarray: Transformed tensor.
+            ndarray: Transformed tensor using tanh.
         """
         self.output = np.tanh(x)
+        
+        self.apply_dropout()
+        
         return self.output
 
     def backward(self, grad, **args):
         """
-        Backward pass to compute the gradient.
+        Compute the backward pass (derivative of tanh).
 
         Args:
             grad (ndarray): Gradient flowing from the next layer.
@@ -76,15 +106,16 @@ class tanh(Activation):
         return grad * (1 - self.output ** 2)
 
 
-
 class sigmoid(Activation):
     """
     Sigmoid activation function.
     """
-
-    def forward(self, x, **args):
+    def __init__(self, dropout=None):
+        super().__init__(dropout)
+    
+    def __call__(self, x, **args):
         """
-        Forward pass of the sigmoid activation function.
+        Compute the __call__ pass using the sigmoid function.
 
         Args:
             x (ndarray): Input tensor.
@@ -93,11 +124,13 @@ class sigmoid(Activation):
             ndarray: Transformed tensor in the range (0, 1).
         """
         self.output = 1 / (1 + np.exp(-x))
+
+        self.apply_dropout()
         return self.output
 
     def backward(self, grad, **args):
         """
-        Backward pass to compute the gradient.
+        Compute the backward pass (derivative of sigmoid).
 
         Args:
             grad (ndarray): Gradient flowing from the next layer.
@@ -112,28 +145,32 @@ class softmax(Activation):
     """
     Softmax activation function.
     """
+    
+    def __init__(self, dropout=None):
+        super().__init__(dropout)    
 
-    def forward(self, x, axiss=1):
+    def __call__(self, x, **args):
         """
-        Forward pass of the softmax activation function.
+        Compute the __call__ pass using the softmax function.
 
         Args:
             x (ndarray): Input tensor.
-            axis (int, optional): Axis along which to compute softmax. Defaults to 1.
 
         Returns:
             ndarray: Transformed tensor where values sum to 1 along the specified axis.
         """
         exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))  # Numerical stability
         self.output = exp_x / np.sum(exp_x, axis=1, keepdims=True)
+
+        self.apply_dropout()
         return self.output
 
     def backward(self, grad, **args):
         """
-        Backward pass for softmax is generally handled with the loss function.
+        Compute the backward pass for softmax.
 
         Returns:
-            ndarray: A tensor of ones (placeholder implementation).
+            ndarray: Gradient (placeholder implementation).
         """
         return grad
 
@@ -142,24 +179,26 @@ class relu(Activation):
     """
     Rectified Linear Unit (ReLU) activation function.
     """
+    def __init__(self, dropout=None):
+        super().__init__(dropout)
 
-    def forward(self, x, test=False, **args):
+    def __call__(self, x, **args):
         """
-        Forward pass of the ReLU activation function.
+        Compute the __call__ pass using ReLU.
 
         Args:
             x (ndarray): Input tensor.
-            test (bool, optional): Flag for test mode. Defaults to False.
 
         Returns:
             ndarray: Tensor with negative values replaced by 0.
         """
         self.output = np.maximum(0, x)
+        self.apply_dropout()
         return self.output
 
     def backward(self, grad, **args):
         """
-        Backward pass to compute the gradient.
+        Compute the backward pass (derivative of ReLU).
 
         Args:
             grad (ndarray): Gradient flowing from the next layer.
@@ -176,62 +215,37 @@ class leaky_relu(Activation):
     """
     Leaky Rectified Linear Unit (Leaky ReLU) activation function.
     """
-
-    def forward(self, x, alpha=0.01, **args):
+    def __init__(self, dropout=None):
+        super().__init__(dropout)
+    
+    def __call__(self, x, alpha=0.01, **args):
         """
-        Forward pass of the Leaky ReLU activation function.
-
-        Args:
-            x (ndarray): Input tensor.
-            alpha (float, optional): Slope for negative values. Defaults to 0.01.
-
-        Returns:
-            ndarray: Transformed tensor with small values for negatives.
+        Compute the __call__ pass using Leaky ReLU.
         """
         self.output = np.where(x > 0, x, alpha * x)
+        self.apply_dropout()
         return self.output
 
     def backward(self, grad, alpha=0.01, **args):
         """
-        Backward pass to compute the gradient.
-
-        Args:
-            x (ndarray): Input tensor.
-            alpha (float, optional): Slope for negative values. Defaults to 0.01.
-
-        Returns:
-            ndarray: Gradient after applying the derivative of Leaky ReLU.
+        Compute the backward pass (derivative of Leaky ReLU).
         """
         dx = np.ones_like(self.output)
         dx[self.output < 0] = alpha
-        return dx
+        return grad * dx
 
 
 class no_activation(Activation):
     """
     No activation (identity function).
     """
-
-    def forward(self, x):
-        """
-        Forward pass with no transformation.
-
-        Args:
-            x (ndarray): Input tensor.
-
-        Returns:
-            ndarray: The input tensor as-is.
-        """
+    def __init__(self, dropout=None):
+        super().__init__(dropout)
+    
+    def __call__(self, x):
+        """Returns input as-is."""
         return x
 
     def backward(self, grad):
-        """
-        Backward pass with no transformation.
-
-        Args:
-            x (ndarray): Input tensor.
-
-        Returns:
-            ndarray: A tensor of ones (no change to gradients).
-        """
+        """Returns gradient as-is."""
         return grad

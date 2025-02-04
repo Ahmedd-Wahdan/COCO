@@ -5,3 +5,4 @@ __pycache__/
 mainTests.py
 data/
 testt.py
+mnist_coco.pkl
