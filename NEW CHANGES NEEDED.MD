@@ -27,4 +27,11 @@ In the upcoming versions, we aim to implement several key features and improveme
 
 ---
 
+# Potential Future Ideas
+
+## Data Pipeline and Preprocessing Modules
+## Model Saving, Loading, and Checkpointing (Callbacks)
+## Automatic Differentiation (Autograd) Engine
+## Advanced Model Architectures and Modules [ ViT, GNNs, Region Proposal Networks]
+
 

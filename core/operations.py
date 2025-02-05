@@ -1,23 +1,48 @@
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
+
 class FastConvolver:
+    """
+    Implements efficient 2D convolution using the im2col approach.
+
+    This class transforms input feature maps into column format to enable
+    matrix multiplication-based convolution, significantly improving performance
+    compared to naive implementations.
+
+    Features:
+    - Supports multi-channel inputs and multiple filters.
+    - Allows custom stride and padding configurations.
+    - Provides utility functions for im2col and col2im transformations.
+
+    Example usage:
+        convolver = FastConvolver()
+        output, col_matrix = convolver.convolve(input_data, kernels, stride=1, padding=1)
+
+    """
     def __init__(self):
         pass
 
     def _im2col(self, input_data, kernel_shape, stride=1):
         """
-        Vectorized im2col for batches using sliding_window_view.
+                Converts an input batch into a columnized matrix for efficient convolution.
 
-        Parameters:
-            input_data (numpy.ndarray): Padded input data of shape (B, C, H, W).
-            kernel_shape (tuple): Tuple (C, H_k, W_k) describing the kernel dimensions.
-            stride (int): Stride of the convolution.
+                This function extracts patches from the input tensor and flattens them into
+                rows, enabling efficient matrix multiplication.
 
-        Returns:
-            col_matrix (numpy.ndarray): 2D array of shape (B * H_out * W_out, C * H_k * W_k)
-                where each row is a flattened patch.
-        """
+                Parameters:
+                    input_data (numpy.ndarray): Padded input data of shape (B, C, H, W).
+                    kernel_shape (tuple): Tuple (C, H_k, W_k) describing the kernel dimensions.
+                    stride (int): Stride of the convolution (applied to height & width).
+
+                Returns:
+                    col_matrix (numpy.ndarray): 2D array of shape (B * H_out * W_out, C * H_k * W_k)
+                        where each row corresponds to a flattened receptive field.
+
+                Notes:
+                    - Assumes input_data is already padded.
+                    - Uses `sliding_window_view` for efficient patch extraction.
+                """
         B, C, H, W = input_data.shape
         # kernel_shape is expected to be (C, H_k, W_k)
         _, H_k, W_k = kernel_shape
@@ -41,13 +66,19 @@ class FastConvolver:
 
     def _transform_kernels(self, kernels):
         """
-        Transform the kernels into a 2D matrix for matrix multiplication.
+        Converts convolution filters into a matrix form for multiplication.
 
         Parameters:
-            kernels (numpy.ndarray): Kernels of shape (F, C, H_k, W_k).
+            kernels (numpy.ndarray): Convolution filters of shape (F, C, H_k, W_k),
+                                     where F is the number of filters.
 
         Returns:
-            numpy.ndarray: Transformed kernels of shape (C * H_k * W_k, F).
+            numpy.ndarray: Reshaped kernel matrix of shape (C * H_k * W_k, F),
+                           where each column represents a flattened kernel.
+
+        Notes:
+            - This transformation allows convolution to be performed using
+              standard matrix multiplication.
         """
         F, C, H_k, W_k = kernels.shape
         # Reshape each kernel to a vector and then transpose so that
@@ -74,16 +105,26 @@ class FastConvolver:
     
     def col2im_accumulation(self,dX_col, input_shape, filter_height, filter_width, stride, padding):
         """
-        Efficiently fold the columns back into the image shape, summing over overlaps.
+        Reconstructs the gradient tensor by summing overlapping regions.
+
+        Used in backpropagation to redistribute gradients from the im2col representation
+        back to the original input shape.
+
         Parameters:
-            dX_col (numpy.ndarray): 2D array of shape (B*H_out*W_out, C*filter_height*filter_width)
-            input_shape (tuple): Original input shape (B, C, H, W)
-            filter_height (int): Height of the filter.
-            filter_width (int): Width of the filter.
-            stride (int): Stride.
-            padding (int): Padding that was applied.
+            dX_col (numpy.ndarray): 2D array of shape (B * H_out * W_out, C * filter_height * filter_width),
+                                    representing gradient patches.
+            input_shape (tuple): Original input shape (B, C, H, W).
+            filter_height (int): Height of the convolution filter.
+            filter_width (int): Width of the convolution filter.
+            stride (int): Stride used in the forward pass.
+            padding (int): Amount of zero-padding applied to the input.
+
         Returns:
-            dInput: Gradient w.r.t the padded input of shape (B, C, H + 2*padding, W + 2*padding).
+            numpy.ndarray: Reconstructed gradient of shape (B, C, H + 2*padding, W + 2*padding).
+
+        Notes:
+            - Accumulates overlapping regions correctly.
+            - This version assumes simple summation without additional normalization.
         """
         B, C, H, W = input_shape
         H_padded = H + 2 * padding
@@ -110,17 +151,28 @@ class FastConvolver:
 
     def convolve(self, input_data, kernels, stride=1, padding=0):
         """
-        Perform 2D convolution using the im2col approach.
+        Performs 2D convolution using the im2col approach.
+
+        This method extracts patches from the input feature map,
+        converts them into a column matrix, and performs convolution using
+        matrix multiplication.
 
         Parameters:
-            input_data (numpy.ndarray): Input data of shape (B, C, H, W).
-            kernels (numpy.ndarray): Kernels of shape (F, C, H_k, W_k).
-            stride (int): Stride of the convolution.
-            padding (int): Amount of zero-padding to add on the spatial dimensions.
+            input_data (numpy.ndarray): Input tensor of shape (B, C, H, W).
+            kernels (numpy.ndarray): Filters of shape (F, C, H_k, W_k),
+                                     where F is the number of filters.
+            stride (int): Stride value for convolution.
+            padding (int): Amount of zero-padding applied before convolution.
 
         Returns:
-            conv_output (numpy.ndarray): Output data of shape (B, F, H_out, W_out).
+            conv_output (numpy.ndarray): Output tensor of shape (B, F, H_out, W_out).
             col_matrix (numpy.ndarray): Columnized patches from the padded input.
+
+        Notes:
+            - Uses `im2col` for efficient patch extraction.
+            - Output dimensions are computed as:
+                H_out = (H + 2 * padding - H_k) // stride + 1
+                W_out = (W + 2 * padding - W_k) // stride + 1
         """
         B, C, H, W = input_data.shape
         F, C, H_k, W_k = kernels.shape
