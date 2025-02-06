@@ -260,6 +260,8 @@ class NAdam(Optimizer):
         layer.weights -= ita_w * vw_corrected
         layer.bias -= ita_b * vb_corrected
 
+        #TODO: Lookahead step need to be checked again (poor implementation)
+
         # Lookahead step.
         layer.weights -= self.beta1 * layer.momentum_w
         layer.bias -= self.beta1 * layer.momentum_b
@@ -321,3 +323,9 @@ class RMSprop(Optimizer):
             layer.grad_w = np.clip(layer.grad_w, -self.clip_value, self.clip_value)
 
         layer.accumelated_Gsquare_w = self.beta2 * layer.accumela
+
+
+
+
+#TODO: ADAMW optimizers
+
