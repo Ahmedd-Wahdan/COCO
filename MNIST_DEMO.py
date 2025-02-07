@@ -4,6 +4,16 @@ from core.utils import load_model
 
 model = load_model('mnist_coco.pkl')  
 
+
+"""
+
+TO USE THIS DEMO:
+1-TRAIN THE MODEL USING COCO
+2- SAVE THE MODEL USING core.utils.save_model(model, 'model_name.pkl')  (this is still beta version) untill load and save state dicts is implemented
+3- LOAD THE MODEL USING core.utils.load_model('model_name.pkl')
+4- RUN THE DEMO
+
+"""
 # Define a set of colors for each digit's prediction bar
 DIGIT_COLORS = {
     0: "#e57373",  # red
