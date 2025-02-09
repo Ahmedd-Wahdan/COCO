@@ -133,7 +133,7 @@ class Model:
 
         print()
 
-    def __call__(self, x):
+    def __call__(self, x, **kwargs):
         """
         ARGS: 
             x (ndarray): Input data if image then (B, C, H, W) else (B, D)
@@ -166,7 +166,7 @@ class Model:
             raise ValueError("Only single image batches are supported.")
 
         self.featuremaps = []
-        self.forward(image, test=True, visualize=True)
+        self(image,visualize=True)
 
         num_conv_layers = len(self.featuremaps)
         if num_conv_layers == 0:
